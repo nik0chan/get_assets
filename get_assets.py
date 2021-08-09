@@ -35,8 +35,8 @@ def url_snapshot(url,path):
         verbose and chrome_options.add_argument("--verbose")
         verbose and chrome_options.add_argument('--log-path=chromium.log')
         driver = webdriver.Chrome(options=chrome_options, executable_path='/usr/local/bin/chromedriver')      
-        driver.set_page_load_timeout(15)        
-        driver.set_window_size(1920,1080)
+        driver.set_page_load_timeout(30)        
+        driver.set_window_size(1366,768)
         driver.get(url)
         output_file = path + str(url).replace('https://', '').replace('http://','').replace('/','')
         output_file += '.png'
@@ -118,15 +118,15 @@ def url_analisys(host,address):
                http_available = http_socket.connect_ex(http_location)
            except socket.timeout:
                http_available = -1
-               DEBUG('Unable to connect to ' + fqdn + 'using 80 (http) port')
+               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 80 (http) port')
            
            try: 
                https_available = https_socket.connect_ex(https_location)
            except socket.timeout:
                https_available = -1
-               DEBUG('Unable to connect to ' + fqdn + 'using 443 (http) port')
+               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 443 (http) port')
 
-           DEBUG('HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
+           verbose and DEBUG('HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
 
            if http_available==0 or https_available==0: 
                url = "http://" + fqdn
@@ -179,20 +179,30 @@ def generate_report(input_csv,output_html):
 
     old_target = sys.stdout
     sys.stdout = open(output_html,'w')
+  
+    infile = open(input_csv,"r")
+
     print("<!DOCTYPE html>")
     print("<html>")
     print("<head>")
+    print("<meta content='text/html;charset=utf-8' http-equiv='Content-Type'>")
+    print("<meta content='utf-8' http-equiv='encoding'>")
     print("<link rel='stylesheet' href='table.css'>")
+    print("<title>Domain hosts</title>", )
     print("</head>")
     print("<body>")
-
-    print("<table class='t1'>")
-
-    print("<thead>")
-    print("<tr><th>ORIGINAL URL</th><th>CERTIFICATE STATUS</th><th>FINAL URL</th><th>SNAPSHOT</th></tr>")
-    print("</thead>")
-
-    infile = open(input_csv,"r")
+    print("<div class='middle'>")
+    print("  <img class=logo src=logo.png alt='LOGO'>")
+    print("  <span class='title'>Domain analysis report </span>")
+    print("</div>")
+    print("<div class='wrapper'>")
+    print(" <div class='table'>")
+    print("     <div class='row header blue'>")
+    print("         <div class='cell'>ORIGINAL URL</div>")
+    print("         <div class='cell'>CERTIFICATE STATUS</div>")
+    print("         <div class='cell'>FINAL URL</div>")
+    print("         <div class='cell'>SNAPSHOT</div>")
+    print("     </div> <!-- End row header -->")
 
     for line in infile:
         row = line.split(",")
@@ -201,24 +211,24 @@ def generate_report(input_csv,output_html):
         url_to = row[2]
         snapshot = row[3]
 
-        print("<tr>")
-        print("<td>%s</td>" % url_from)
+        print("     <div class='row'>")
+        print("         <div class='cell' data-title='ORIGINAL URL'>%s</div>" % url_from)
         if(cert_status == "0"):
-            print("<td>OK</td>")
+            print("         <div class='cell' data-title='CERTIFICATE STATUS'>OK</div>")
         elif (cert_status == "-1"):
-            print("<td>KO - No certificate</td>")
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, No certificate</div>")
         elif (cert_status == "-2"):
-            print("<td>KO - NON SSL ERROR</td>")
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, No certificate error</div>")
         elif (cert_status == "-3"):
-            print("<td>KO - Incorrect name</td>")            
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect name</div>")
         elif (cert_status == "-4"):
-            print("<td>KO - Incorrect name</td>")   
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Expired</div>")
 
-        print("<td>%s</td>" % url_to)
-        print("<td><img src='%s' alt='No preview available'></td>" % snapshot)
-        print("</tr>")
-
-    print("</table>")
+        print("         <div class='cell' data-title='FINAL URL'>%s</div>" % url_to)
+        print("         <div class='cell' data-title='ORIGINAL URL'><img src='%s' alt='No preview available' class='img'></div>" % snapshot)
+        print("     </div><!-- End row -->") # Row
+    print(" </div><!-- End table -->")  # Table 
+    print("</div><!-- End Wrapper -->")  # Wrapper
     print("</body>")
     print("</html>")
 
@@ -253,7 +263,7 @@ except NameError:
 Path(domain).mkdir(parents=True, exist_ok=True)
 Path(domain+"/snapshots").mkdir(parents=True, exist_ok=True)
 os.popen('cp table.css ' + domain) 
-
+os.popen('cp logo.png ' + domain)
 # Obtain domzins from zone_transfer
 sites_list=dns_zone_xfer(domain)
 
