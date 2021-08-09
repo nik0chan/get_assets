@@ -11,9 +11,16 @@ import socket
 import sys
 import os
 
+# Test SSL
+from urllib.request import Request, urlopen, ssl, socket
+from urllib.error import URLError, HTTPError
+import json
+
+# Snapshot web
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 
+# FS operations
 from pathlib import Path
 
 ns_servers = []
@@ -38,10 +45,10 @@ def url_snapshot(url,path):
         driver.set_page_load_timeout(30)        
         driver.set_window_size(1366,768)
         driver.get(url)
-        output_file = path + str(url).replace('https://', '').replace('http://','').replace('/','')
+        output_file = str(url).replace('https://', '').replace('http://','').replace('/','')
         output_file += '.png'
         verbose and DEBUG("Ouput file: " + output_file)
-        driver.save_screenshot(output_file)
+        driver.save_screenshot(path + output_file)
         driver.close()
     except Exception as e:
         ERROR('' + str(e))
@@ -53,7 +60,10 @@ def follow(url):
 # Test if an url is redirected 
     try:
       verbose and DEBUG("Analyzing " + str(url) + " URL")
-      response = requests.get(url, timeout=10)
+      headers = {'User-Agent': 'Mozilla/5.0 (MyOS; MyArch) get_assets/1.0 (KHTML, like Gecko) Selenium/Chromium/some_version',
+                 'referer': str(url)  
+      }  
+      response = requests.get(url, timeout=10, headers=headers)
       verbose and DEBUG("STATUS CODE: " + str(response.status_code))
       verbose and DEBUG("URL: " + response.url)
             
@@ -75,38 +85,50 @@ def verify_ssl(url):
 # Verify if SSL certificate for URL is correct 
     val = 0
     verbose and DEBUG('Performing SSL analysis for ' + str(url))
-    if not url.startswith("https"):
-        ERROR('URL is not SSL -> ' + url)
-        val = -1 
-    else:
-        try:
-            r = requests.get(url)
-            if (r.status_code != requests.codes.ok):
-                ERROR("Incorrect domain! status code was " + str(r.status_code))
-                val = -2 
-        except Exception as error:
-            if "doesn't match" in str(error):
-                ERROR("Certificate doesn't match URL name")
-                val = -3
-            if "certificate has expired" in str(error):
-                ERROR("Certificate has expired")
-                val = -4
-            else:
-                verbose and DEBUG('Certificate configured at ' + url + ' is OK')
+    url = "https://" + url
+    try:       
+        headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36',
+                   'referer': str(url)
+        }
+        r = requests.get(url, headers=headers)
+        if (r.status_code != requests.codes.ok):
+            ERROR("Incorrect domain! status code was " + str(r.status_code))
+            val = -1 
+        else:
+            verbose and DEBUG('Certificate configured at ' + url + ' is OK')
 
+    except Exception as error:
+        if "doesn't match" in str(error):
+            ERROR("Certificate doesn't match domain name")
+            val = -2
+        elif "certificate has expired" in str(error):
+            ERROR("Certificate has expired")
+            val = -3
+        elif "Errno 111" in str(error):
+            ERROR("Connection refused")
+            val = -4
+        else: 
+            ERROR("" + str(error))
+            ERROR("Unknown error")
+            val = -5
+    
     return val
 
-def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9.:/_-]').search):
+def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
 # Verify if chars on URL are permitted 
+    verbose and DEBUG('Testing charset for ' + strg)
     return not bool(search(strg))
 
-def url_analisys(host,address):
+def url_analisys(host,address,folder_path):
 # Performs triple analysis for URL, redirects, certificate validation, and image dump
     try:
         result = -1
-        fqdn = str(host) + "." + str(address)
+        if len(str(address)) > 1:
+            fqdn = str(host) + "." + str(address)
+        else: 
+            fqdn = str(host)
+
         if  charset_ok(fqdn):
-           verbose and DEBUG('Is port 80 reachable on ' + fqdn + '?')
            http_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
            http_socket.settimeout(5)
            https_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -114,14 +136,20 @@ def url_analisys(host,address):
            http_location = (fqdn,80)
            https_location = (fqdn,443)
 
+           verbose and DEBUG('Has ' + fqdn + ' DNS resolution and has 80 or 443 connection available ?')
            try: 
                http_available = http_socket.connect_ex(http_location)
+           except socket.gaierror:
+               verbose and ERROR('DNS resolution not found for ' + fqdn)
+               result=str(fqdn) + ',-1,DNS ERROR,,'
            except socket.timeout:
                http_available = -1
-               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 80 (http) port')
-           
+               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 80 (http) port')      
+               
+           verbose and DEBUG('Is port 443 reachable on ' + fqdn + '?')
            try: 
                https_available = https_socket.connect_ex(https_location)
+               ssl_status=verify_ssl(fqdn)     # Verify SSL Status 
            except socket.timeout:
                https_available = -1
                verbose and DEBUG('Unable to connect to ' + fqdn + 'using 443 (http) port')
@@ -130,14 +158,13 @@ def url_analisys(host,address):
 
            if http_available==0 or https_available==0: 
                url = "http://" + fqdn
-               ssl_status = -1 
-               verbose and DEBUG("Inspecting: " + url )
-                        
+               verbose and DEBUG("Finding final URL for: " + url )
+
                final_url=follow(url)
-               if final_url != -1 : 
-                  ssl_status=verify_ssl(final_url)
-                  snapshot_file = url_snapshot(url,str(address) + '/snapshots/')
-                  result=str(url) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + './snapshots/' + fqdn + '.png'
+               if final_url != -1 :                   
+                  snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
+                  verbose and DEBUG("File stored on: " + snapshot_file)
+                  result=str(fqdn) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file
                
                else:
                   verbose and DEBUG('Skipping ' + fqdn + ' due to unable to connect to 80 nor 443 port')
@@ -146,7 +173,7 @@ def url_analisys(host,address):
             WARNING('Skipping ' + str(fqdn) + ' due incorrect character found')
 
     except Exception as e:
-        print('Error',e)
+        result=str(fqdn) + ',-1,DNS ERROR,,'
 
     return result    
 
@@ -214,15 +241,30 @@ def generate_report(input_csv,output_html):
         print("     <div class='row'>")
         print("         <div class='cell' data-title='ORIGINAL URL'>%s</div>" % url_from)
         if(cert_status == "0"):
-            print("         <div class='cell' data-title='CERTIFICATE STATUS'>OK</div>")
+            print("         <div class='cell' data-title='CERTIFICATE STATUS'> <B>OK</B><BR>")
+            context = ssl.create_default_context()
+            with socket.create_connection((url_from, '443')) as sock:
+                with context.wrap_socket(sock, server_hostname=url_from) as ssock:
+                    cert = ssock.getpeercert()  
+                    print("<br><b> CERTIFICATE NAMES</b> <br>")    
+                    for san in cert['subjectAltName']:
+                        print(san[1] + '<br>')
+                    print("<br><B>CERTIFICATE ISSUER:</B> <br>")    
+                    issuer = dict(item[0] for item in cert['issuer'])            
+                    print(issuer['organizationName']+'<br>')
+                    print("<br><B>Certificate expires on:</B><br>")    
+                    print(cert['notAfter'])
+            print("</div>")
         elif (cert_status == "-1"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, No certificate</div>")
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect domain</div>")
         elif (cert_status == "-2"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, No certificate error</div>")
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Name error</div>")
         elif (cert_status == "-3"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect name</div>")
-        elif (cert_status == "-4"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Expired</div>")
+        elif (cert_status == "-4"):
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Refused connection</div>")
+        elif (cert_status == "-5"):
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Unknown error </div>")
 
         print("         <div class='cell' data-title='FINAL URL'>%s</div>" % url_to)
         print("         <div class='cell' data-title='ORIGINAL URL'><img src='%s' alt='No preview available' class='img'></div>" % snapshot)
@@ -236,14 +278,24 @@ def generate_report(input_csv,output_html):
     sys.stdout = old_target
     verbose and DEBUG('Report generated a file: ' + output_html)
 
+def get_hosts_from_file(file):
+    verbose and DEBUG("Reading host file from " + file)
+    hosts = {}
+    f = open(file,'r')
+    lines = f.read().splitlines()
+    for host in lines:
+        hosts[host]=""
+
+    return hosts
+
 # Main 
 
 try: 
-    opts, args = getopt.getopt(sys.argv[1:],"vd:",["verbose","domain="])
+    opts, args = getopt.getopt(sys.argv[1:],"vd:l:",["verbose","domain="])
 
 except getopt.GetoptError: 
     ERROR('Error unexpected input')
-    print('Usage: get_assets.py [-v] -d <domain> [--verbose --domain <domain>]')
+    print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>]')
     sys.exit(2) 
 
 for opt, arg in opts: 
@@ -252,28 +304,42 @@ for opt, arg in opts:
         DEBUG('Verbose mode ON')          
     elif opt in ("-d", "--domain"):
         domain = arg
+    elif opt in ("-l", "--hosts"):
+        hosts_list = arg
 
-try: domain   
+
+try: 
+    domain  
+    verbose and DEBUG("Domain zone_transfer set") 
+    folder_path = domain + "_report"
+    sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
+    
 except NameError:
-    ERROR('Missing domain.')
-    print('Usage: get_assets.py [-v] -d <domain> [--verbose --domain <domain>]')
-    sys.exit(2)
+    try: 
+        hosts_list
+        verbose and DEBUG("Host list set")
+        folder_path = hosts_list + "_report"
+        sites_list=get_hosts_from_file(hosts_list)  # Obtain hosts from file
+
+    except NameError: 
+        ERROR('Missing domain or hosts list file you have to specify at least one of them')
+        print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>]')
+        sys.exit(2)
 
 # Create folders structure
-Path(domain).mkdir(parents=True, exist_ok=True)
-Path(domain+"/snapshots").mkdir(parents=True, exist_ok=True)
-os.popen('cp table.css ' + domain) 
-os.popen('cp logo.png ' + domain)
-# Obtain domzins from zone_transfer
-sites_list=dns_zone_xfer(domain)
+Path(folder_path).mkdir(parents=True, exist_ok=True)
+Path(folder_path+"/snapshots").mkdir(parents=True, exist_ok=True)
+os.popen('cp table.css ' + folder_path) 
+os.popen('cp logo.png ' + folder_path)
+csv_file = folder_path + "/report.csv"
+report_file = folder_path + "/report.html"
 
-csv_file = domain + "/report.csv"
-report_file = domain + "/report.html"
 f = open(csv_file,'w')
 for site in sites_list:
-    result=url_analisys(site,sites_list[site])    
+    result=url_analisys(site,sites_list[site],folder_path)    
     if result != -1:
        f.write(result + "\n")
 f.close()
+
 generate_report(csv_file,report_file) 
 
