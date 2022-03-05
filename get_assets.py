@@ -1,4 +1,4 @@
-#!/usr/bin/python 
+#!/usr/bin/python
 
 import re
 from dns.exception import Timeout
@@ -18,7 +18,9 @@ import json
 
 # Snapshot web
 from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from webdriver_manager.chrome import ChromeDriverManager
 
 # FS operations
 from pathlib import Path
@@ -31,7 +33,7 @@ def WARNING(msg): print("\033[93m {}\033[00m" .format("[WARNING] " + "\033[35m" 
 def DEBUG(msg): print("\033[92m {}\033[00m" .format("[DEBUG] " + "\033[36m" + msg))
 
 def url_snapshot(url,path):
-# Get a web snapshot 
+# Get a web snapshot
     try:
         verbose and DEBUG("Getting snapshot for URL: " + str(url) + " to path: " + path)
         chrome_options = Options()
@@ -39,10 +41,13 @@ def url_snapshot(url,path):
         chrome_options.add_argument("--ignore-ssl-errors=yes")
         chrome_options.add_argument("--ignore-certificate-errors")
         chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument("--disable-dev-shm-usage")
         verbose and chrome_options.add_argument("--verbose")
         verbose and chrome_options.add_argument('--log-path=chromium.log')
-        driver = webdriver.Chrome(options=chrome_options, executable_path='/usr/local/bin/chromedriver')      
-        driver.set_page_load_timeout(30)        
+        s = Service(ChromeDriverManager().install()) 
+        driver = webdriver.Chrome(service=s,options=chrome_options)
+        driver.implicitly_wait(10)
+        driver.set_page_load_timeout(30)
         driver.set_window_size(1366,768)
         driver.get(url)
         output_file = str(url).replace('https://', '').replace('http://','').replace('/','')
@@ -57,16 +62,16 @@ def url_snapshot(url,path):
     return output_file
 
 def follow(url):
-# Test if an url is redirected 
+# Test if an url is redirected
     try:
       verbose and DEBUG("Analyzing " + str(url) + " URL")
       headers = {'User-Agent': 'Mozilla/5.0 (MyOS; MyArch) get_assets/1.0 (KHTML, like Gecko) Selenium/Chromium/some_version',
-                 'referer': str(url)  
-      }  
+                 'referer': str(url)
+      }
       response = requests.get(url, timeout=10, headers=headers)
       verbose and DEBUG("STATUS CODE: " + str(response.status_code))
       verbose and DEBUG("URL: " + response.url)
-            
+
       if response.history:
          verbose and DEBUG("URL " + url + " was redirected")
          for resp in response.history:
@@ -74,26 +79,29 @@ def follow(url):
                 return str(response.url)
 
       else:
-         verbose and DEBUG("URL " + url + " was NOT redirected")    
+         verbose and DEBUG("URL " + url + " was NOT redirected")
          return str(response.url)
-    
+
     except Exception as e:
         verbose and  ERROR('shit! '+str(e))
         return -1
 
 def verify_ssl(url):
-# Verify if SSL certificate for URL is correct 
+# Verify if SSL certificate for URL is correct
     val = 0
     verbose and DEBUG('Performing SSL analysis for ' + str(url))
     url = "https://" + url
-    try:       
+    try:
         headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36',
                    'referer': str(url)
         }
         r = requests.get(url, headers=headers)
         if (r.status_code != requests.codes.ok):
-            ERROR("Incorrect domain! status code was " + str(r.status_code))
-            val = -1 
+            if r.status_code != 403: 
+              WARNING("Site has forbiden access 403")
+            else:
+              ERROR("Incorrect domain! status code was " + str(r.status_code))
+            val = -1
         else:
             verbose and DEBUG('Certificate configured at ' + url + ' is OK')
 
@@ -111,11 +119,10 @@ def verify_ssl(url):
             ERROR("" + str(error))
             ERROR("Unknown error")
             val = -5
-    
     return val
 
 def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
-# Verify if chars on URL are permitted 
+# Verify if chars on URL are permitted
     verbose and DEBUG('Testing charset for ' + strg)
     return not bool(search(strg))
 
@@ -125,7 +132,7 @@ def url_analisys(host,address,folder_path):
         result = -1
         if len(str(address)) > 1:
             fqdn = str(host) + "." + str(address)
-        else: 
+        else:
             fqdn = str(host)
 
         if  charset_ok(fqdn):
@@ -137,48 +144,59 @@ def url_analisys(host,address,folder_path):
            https_location = (fqdn,443)
 
            verbose and DEBUG('Has ' + fqdn + ' DNS resolution and has 80 or 443 connection available ?')
-           try: 
-               http_available = http_socket.connect_ex(http_location)
-           except socket.gaierror:
-               verbose and ERROR('DNS resolution not found for ' + fqdn)
-               result=str(fqdn) + ',-1,DNS ERROR,,'
-           except socket.timeout:
-               http_available = -1
-               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 80 (http) port')      
-               
-           verbose and DEBUG('Is port 443 reachable on ' + fqdn + '?')
-           try: 
-               https_available = https_socket.connect_ex(https_location)
-               ssl_status=verify_ssl(fqdn)     # Verify SSL Status 
-           except socket.timeout:
-               https_available = -1
-               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 443 (http) port')
+           http_available=https_available=dns_available=0
+           # TEST 1: Has FQDN DNS resolucion 
+           try:
+              answer = dns.resolver.query(fqdn)
+              verbose and DEBUG('Yes, I\'ve been able to resolve name')
+              dns_available=1
+           # TEST 2: Has DNS resolution, are we able to connect to 80 port? 
+              try:
+                  http_socket.connect_ex(http_location)
+                  verbose and DEBUG('Yes, I\'ve been able to connect through 80 (http) port')
+                  dns_available=1
+                  http_available=1
+           # TEST 3: Has DNS resolution and http connection, can we connect on 443 port ?  
+                  verbose and DEBUG('Is port 443 reachable on ' + fqdn + '?')
+                  try:
+                     https_socket.connect_ex(https_location)
+                     ssl_status=verify_ssl(fqdn)
+                     verbose and DEBUG('Yes, I\'ve been able to connect through 443 (ssl) port')
+                     https_available=1
+                  except socket.timeout:
+                     verbose and DEBUG(fqdn + 'Has DNS resoluction but I\'m unable to connect to through 443 (ssl) port')
+              except socket.timeout:
+                  verbose and DEBUG(fqdn + 'Has DNS resolution but I\'m unable to connect to through 80 (http) port')
 
-           verbose and DEBUG('HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
+           except Exception:
+              verbose and ERROR('Np, DNS resolution not found for ' + fqdn + ' bypassing other tests')
+              result=str(fqdn) + ',-1,UNABLE TO RESOLVE DNS,,'
 
-           if http_available==0 or https_available==0: 
+           verbose and WARNING('DNS:' +str(dns_available) + ' HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
+
+           if http_available or https_available:
                url = "http://" + fqdn
                verbose and DEBUG("Finding final URL for: " + url )
 
                final_url=follow(url)
-               if final_url != -1 :                   
+               if final_url != -1 :
                   snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
                   verbose and DEBUG("File stored on: " + snapshot_file)
                   result=str(fqdn) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file
-               
+
                else:
                   verbose and DEBUG('Skipping ' + fqdn + ' due to unable to connect to 80 nor 443 port')
-                  result = -1 
+                  result = -1
         else:
             WARNING('Skipping ' + str(fqdn) + ' due incorrect character found')
 
     except Exception as e:
         result=str(fqdn) + ',-1,DNS ERROR,,'
 
-    return result    
+    return result
 
 def dns_zone_xfer(address):
-# Retrieves all host entries form domain on a dictionary 
+# Retrieves all host entries form domain on a dictionary
     hosts = {}
     verbose and DEBUG("Identifying nameservers")
     ns_answer = dns.resolver.resolve(address, 'NS')
@@ -193,7 +211,6 @@ def dns_zone_xfer(address):
                 zone = dns.zone.from_xfr(dns.query.xfr(str(ip), address))
                 for host in zone:
                     hosts[str(host)]=address
-                    
             except Exception as e:
                 verbose and ERROR("NS " + str(server) + "refused zone transfer, are you sure you have permission to transfer DNS zone?")
 
@@ -204,9 +221,9 @@ def generate_report(input_csv,output_html):
 # Generate html report file from csv 
 # Requires style file (table.css) with T1 class definition for table formatting
 
+    verbose and DEBUG("Generating HTML report from CSV")
     old_target = sys.stdout
     sys.stdout = open(output_html,'w')
-  
     infile = open(input_csv,"r")
 
     print("<!DOCTYPE html>")
@@ -245,14 +262,14 @@ def generate_report(input_csv,output_html):
             context = ssl.create_default_context()
             with socket.create_connection((url_from, '443')) as sock:
                 with context.wrap_socket(sock, server_hostname=url_from) as ssock:
-                    cert = ssock.getpeercert()  
-                    print("<br><b> CERTIFICATE NAMES</b> <br>")    
+                    cert = ssock.getpeercert()
+                    print("<br><b> CERTIFICATE NAMES</b> <br>")
                     for san in cert['subjectAltName']:
                         print(san[1] + '<br>')
-                    print("<br><B>CERTIFICATE ISSUER:</B> <br>")    
-                    issuer = dict(item[0] for item in cert['issuer'])            
+                    print("<br><B>CERTIFICATE ISSUER:</B> <br>")
+                    issuer = dict(item[0] for item in cert['issuer'])
                     print(issuer['organizationName']+'<br>')
-                    print("<br><B>Certificate expires on:</B><br>")    
+                    print("<br><B>Certificate expires on:</B><br>")
                     print(cert['notAfter'])
             print("</div>")
         elif (cert_status == "-1"):
@@ -269,7 +286,7 @@ def generate_report(input_csv,output_html):
         print("         <div class='cell' data-title='FINAL URL'>%s</div>" % url_to)
         print("         <div class='cell' data-title='ORIGINAL URL'><img src='%s' alt='No preview available' class='img'></div>" % snapshot)
         print("     </div><!-- End row -->") # Row
-    print(" </div><!-- End table -->")  # Table 
+    print(" </div><!-- End table -->")  # Table
     print("</div><!-- End Wrapper -->")  # Wrapper
     print("</body>")
     print("</html>")
@@ -288,40 +305,40 @@ def get_hosts_from_file(file):
 
     return hosts
 
-# Main 
+# Main
 
-try: 
+try:
     opts, args = getopt.getopt(sys.argv[1:],"vd:l:",["verbose","domain="])
 
-except getopt.GetoptError: 
+except getopt.GetoptError:
     ERROR('Error unexpected input')
     print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>]')
-    sys.exit(2) 
+    sys.exit(2)
 
-for opt, arg in opts: 
-    if opt in ('-v','--verbose'): 
+for opt, arg in opts:
+    if opt in ('-v','--verbose'):
         verbose=1
-        DEBUG('Verbose mode ON')          
+        DEBUG('Verbose mode ON')
     elif opt in ("-d", "--domain"):
         domain = arg
     elif opt in ("-l", "--hosts"):
         hosts_list = arg
 
 
-try: 
-    domain  
-    verbose and DEBUG("Domain zone_transfer set") 
+try:
+    domain
+    verbose and DEBUG("Domain zone_transfer set")
     folder_path = domain + "_report"
     sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
-    
+
 except NameError:
-    try: 
+    try:
         hosts_list
         verbose and DEBUG("Host list set")
         folder_path = hosts_list + "_report"
         sites_list=get_hosts_from_file(hosts_list)  # Obtain hosts from file
 
-    except NameError: 
+    except NameError:
         ERROR('Missing domain or hosts list file you have to specify at least one of them')
         print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>]')
         sys.exit(2)
@@ -329,17 +346,18 @@ except NameError:
 # Create folders structure
 Path(folder_path).mkdir(parents=True, exist_ok=True)
 Path(folder_path+"/snapshots").mkdir(parents=True, exist_ok=True)
-os.popen('cp table.css ' + folder_path) 
+os.popen('cp table.css ' + folder_path)
 os.popen('cp logo.png ' + folder_path)
 csv_file = folder_path + "/report.csv"
 report_file = folder_path + "/report.html"
 
+verbose and DEBUG("Performing sites anlysis and generating CSV report")
 f = open(csv_file,'w')
 for site in sites_list:
-    result=url_analisys(site,sites_list[site],folder_path)    
+    result=url_analisys(site,sites_list[site],folder_path)
     if result != -1:
        f.write(result + "\n")
 f.close()
-
-generate_report(csv_file,report_file) 
-
+verbose and DEBUG("CSV report generated")
+generate_report(csv_file,report_file)
+verbose and DEBUG("HTML report generated")
