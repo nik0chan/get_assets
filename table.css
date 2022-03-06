@@ -107,6 +107,22 @@ body {
   color: #dcf500;
 }
 
+.cell_warn {
+  padding: 6px 12px;
+  display: table-cell;
+  vertical-align: top;
+  background: #fcff33;
+  color: #ff0000;
+}
+
+.cell_ok {
+  padding: 6px 12px;
+  display: table-cell;
+  vertical-align: top;
+  background: #33ff99;
+  color: #000000;
+}
+
 .img {
   width: 100%;
   height: auto;
@@ -126,5 +142,3 @@ body {
     display: block;
   }
 }
-
-
