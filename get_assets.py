@@ -1,6 +1,7 @@
 #!/usr/bin/python
 
 import re
+import datetime
 from dns.exception import Timeout
 import dns.zone
 import dns.resolver
@@ -25,7 +26,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # FS operations
 from pathlib import Path
 
-ns_servers = []
+ns_servers = [] 
 verbose = 0
 
 def ERROR(msg): print("\033[91m {}\033[00m" .format("[ERROR] " + "\033[93m" + msg))
@@ -128,7 +129,9 @@ def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
 
 def url_analisys(host,address,folder_path):
 # Performs triple analysis for URL, redirects, certificate validation, and image dump
+    verbose and DEBUG('Analysing: ' + host + " " + address)
     try:
+        IP=socket.gethostbyname(host)
         result = -1
         if len(str(address)) > 1:
             fqdn = str(host) + "." + str(address)
@@ -170,7 +173,7 @@ def url_analisys(host,address,folder_path):
 
            except Exception:
               verbose and ERROR('Np, DNS resolution not found for ' + fqdn + ' bypassing other tests')
-              result=str(fqdn) + ',-1,UNABLE TO RESOLVE DNS,,'
+              result=str(fqdn) + ',' + str(IP) + ',-1,UNABLE TO RESOLVE DNS,,'
 
            verbose and WARNING('DNS:' +str(dns_available) + ' HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
 
@@ -182,7 +185,7 @@ def url_analisys(host,address,folder_path):
                if final_url != -1 :
                   snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
                   verbose and DEBUG("File stored on: " + snapshot_file)
-                  result=str(fqdn) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file
+                  result=str(fqdn) + ',' + str(IP) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file
 
                else:
                   verbose and DEBUG('Skipping ' + fqdn + ' due to unable to connect to 80 nor 443 port')
@@ -191,7 +194,7 @@ def url_analisys(host,address,folder_path):
             WARNING('Skipping ' + str(fqdn) + ' due incorrect character found')
 
     except Exception as e:
-        result=str(fqdn) + ',-1,DNS ERROR,,'
+        result=str(fqdn) + ',' + str(IP) + ',-1,DNS ERROR,,'
 
     return result
 
@@ -251,12 +254,13 @@ def generate_report(input_csv,output_html):
     for line in infile:
         row = line.split(",")
         url_from = row[0]
-        cert_status = row[1]
-        url_to = row[2]
-        snapshot = row[3]
+        ip = row[1]
+        cert_status = row[2]
+        url_to = row[3]
+        snapshot = row[4]
 
         print("     <div class='row'>")
-        print("         <div class='cell' data-title='ORIGINAL URL'>%s</div>" % url_from)
+        print("         <div class='cell' data-title='ORIGINAL URL'>%s <BR> %s</div>" % (url_from,ip))
         if(cert_status == "0"):
             print("         <div class='cell' data-title='CERTIFICATE STATUS'> <B>OK</B><BR>")
             context = ssl.create_default_context()
@@ -270,7 +274,17 @@ def generate_report(input_csv,output_html):
                     issuer = dict(item[0] for item in cert['issuer'])
                     print(issuer['organizationName']+'<br>')
                     print("<br><B>Certificate expires on:</B><br>")
+                    certExpires = datetime.datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+                    daysToExpiration = (certExpires - datetime.datetime.now()).days
+                    if(daysToExpiration < 1):
+                      print("<div class='cell_ko'>")
+                    elif(daysToExpiration < 15):  
+                      print("<div class='cell_warn'>")
+                    else:
+                      print("<div class='cell_ok'>")
+                        
                     print(cert['notAfter'])
+                    print("</div>")
             print("</div>")
         elif (cert_status == "-1"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect domain</div>")
@@ -323,7 +337,6 @@ for opt, arg in opts:
         domain = arg
     elif opt in ("-l", "--hosts"):
         hosts_list = arg
-
 
 try:
     domain
