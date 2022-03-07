@@ -367,9 +367,12 @@ report_file = folder_path + "/report.html"
 verbose and DEBUG("Performing sites anlysis and generating CSV report")
 f = open(csv_file,'w')
 for site in sites_list:
-    result=url_analisys(site,sites_list[site],folder_path)
-    if result != -1:
-       f.write(result + "\n")
+    if(charset_ok(site)):
+      result=url_analisys(site,sites_list[site],folder_path)
+      if result != -1:
+         f.write(result + "\n")
+    else:
+      verbose and WARNING("Bypassing " + site + " due incorrect characters found.")  
 f.close()
 verbose and DEBUG("CSV report generated")
 generate_report(csv_file,report_file)
