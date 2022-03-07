@@ -26,7 +26,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 # FS operations
 from pathlib import Path
 
-ns_servers = [] 
+ns_servers = []
 verbose = 0
 
 def ERROR(msg): print("\033[91m {}\033[00m" .format("[ERROR] " + "\033[93m" + msg))
@@ -45,7 +45,7 @@ def url_snapshot(url,path):
         chrome_options.add_argument("--disable-dev-shm-usage")
         verbose and chrome_options.add_argument("--verbose")
         verbose and chrome_options.add_argument('--log-path=chromium.log')
-        s = Service(ChromeDriverManager().install()) 
+        s = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=s,options=chrome_options)
         driver.implicitly_wait(10)
         driver.set_page_load_timeout(30)
@@ -59,7 +59,7 @@ def url_snapshot(url,path):
     except Exception as e:
         ERROR('' + str(e))
         output_file = -1
-   
+
     return output_file
 
 def follow(url):
@@ -129,16 +129,25 @@ def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
 
 def url_analisys(host,address,folder_path):
 # Performs triple analysis for URL, redirects, certificate validation, and image dump
-    verbose and DEBUG('Analysing: ' + host + " " + address)
-    try:
-        IP=socket.gethostbyname(host)
-        result = -1
-        if len(str(address)) > 1:
-            fqdn = str(host) + "." + str(address)
-        else:
-            fqdn = str(host)
+    if len(str(address)) > 1:
+       fqdn = str(host) + "." + str(address)
+    else:
+       fqdn = str(host)
 
-        if  charset_ok(fqdn):
+    verbose and DEBUG('Analysing URL: ' + fqdn)
+    try:
+        IP=socket.gethostbyname(fqdn)
+    except socket.gaierror:
+        IP="NOT AVAILABLE"
+        verbose and DEBUG('Unable to resolve IP for ' + fqdn + ' maybe not a A,CNAME entry.')
+    except Exception:
+        verbose and DEBUG('Unable to resolve IP for ' + fqdn + ' maybe not a A,CNAME entry.')
+        IP="NOT AVAILABLE"
+
+
+    try:
+        result = -1
+        if charset_ok(fqdn):
            http_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
            http_socket.settimeout(5)
            https_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -194,7 +203,7 @@ def url_analisys(host,address,folder_path):
             WARNING('Skipping ' + str(fqdn) + ' due incorrect character found')
 
     except Exception as e:
-        result=str(fqdn) + ',' + str(IP) + ',-1,DNS ERROR,,'
+        result=str(host) + ',' + str(IP) + ',-1,DNS ERROR,,'
 
     return result
 
@@ -372,7 +381,7 @@ for site in sites_list:
       if result != -1:
          f.write(result + "\n")
     else:
-      verbose and WARNING("Bypassing " + site + " due incorrect characters found.")  
+      verbose and WARNING("Bypassing " + site + " due incorrect characters found.")
 f.close()
 verbose and DEBUG("CSV report generated")
 generate_report(csv_file,report_file)
