@@ -182,7 +182,7 @@ def url_analisys(host,address,folder_path):
 
            except Exception:
               verbose and ERROR('Np, DNS resolution not found for ' + fqdn + ' bypassing other tests')
-              result=str(fqdn) + ',' + str(IP) + ',-1,UNABLE TO RESOLVE DNS,,'
+              result="KO" + str(fqdn) + ',' + str(IP) + ',-1,UNABLE TO RESOLVE DNS,,'
 
            verbose and WARNING('DNS:' +str(dns_available) + ' HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
 
@@ -194,16 +194,19 @@ def url_analisys(host,address,folder_path):
                if final_url != -1 :
                   snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
                   verbose and DEBUG("File stored on: " + snapshot_file)
-                  result=str(fqdn) + ',' + str(IP) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file
-
+                  if(ssl_status==0): # Cert is OK
+                    result="OK" + ',' + str(fqdn) + ',' + str(IP) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file
+                  else:  
+                    result="KO" + ',' + str(fqdn) + ',' + str(IP) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file
                else:
                   verbose and DEBUG('Skipping ' + fqdn + ' due to unable to connect to 80 nor 443 port')
-                  result = -1
+                  result = "KO" + ',' + str(fqdn) + ',' + str(IP) + ',' + "KO" + ',' + 'KO' + ',' + "not available" 
         else:
             WARNING('Skipping ' + str(fqdn) + ' due incorrect character found')
+            result = "KO" + ',' + str(fqdn) + ',' + "incorrect character found" + ',' + "KO" + ',' + 'KO' + ',' + "not available" 
 
     except Exception as e:
-        result=str(host) + ',' + str(IP) + ',-1,DNS ERROR,,'
+        result="KO" + ',' + str(host) + ',' + str(e) + ',-1,DNS ERROR,,'
 
     return result
 
@@ -229,7 +232,7 @@ def dns_zone_xfer(address):
         continue
     return hosts
 
-def generate_report(input_csv,output_html):
+def generate_report(input_csv,output_html,report_type):
 # Generate html report file from csv 
 # Requires style file (table.css) with T1 class definition for table formatting
 
@@ -262,11 +265,18 @@ def generate_report(input_csv,output_html):
 
     for line in infile:
         row = line.split(",")
-        url_from = row[0]
-        ip = row[1]
-        cert_status = row[2]
-        url_to = row[3]
-        snapshot = row[4]
+        status = row[0]
+        url_from = row[1]
+        ip = row[2]
+        cert_status = row[3]
+        url_to = row[4]
+        snapshot = row[5]
+        
+        if(report_type!='F' and status =="OK"):
+           continue
+
+        if(report_type!='V' and status !="OK"):
+           continue
 
         print("     <div class='row'>")
         print("         <div class='cell' data-title='ORIGINAL URL'>%s <BR> %s</div>" % (url_from,ip))
@@ -331,7 +341,7 @@ def get_hosts_from_file(file):
 # Main
 
 try:
-    opts, args = getopt.getopt(sys.argv[1:],"vd:l:",["verbose","domain="])
+    opts, args = getopt.getopt(sys.argv[1:],"vd:l:r:",["verbose","domain="])
 
 except getopt.GetoptError:
     ERROR('Error unexpected input')
@@ -346,12 +356,18 @@ for opt, arg in opts:
         domain = arg
     elif opt in ("-l", "--hosts"):
         hosts_list = arg
+    elif opt in ("-r", "--report"):
+        report_type = arg
 
 try:
     domain
     verbose and DEBUG("Domain zone_transfer set")
     folder_path = domain + "_report"
     sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
+
+    if(report_type != 'F' and report_type != 'V'):
+       WARNING('Invalid report type specified, defaulting to all')
+       report_type='A'
 
 except NameError:
     try:
@@ -381,8 +397,8 @@ for site in sites_list:
       if result != -1:
          f.write(result + "\n")
     else:
-      verbose and WARNING("Bypassing " + site + " due incorrect characters found.")
+      verbose and WARNING("Bypassing " + site + " analysis due incorrect characters found.")
 f.close()
 verbose and DEBUG("CSV report generated")
-generate_report(csv_file,report_file)
+generate_report(csv_file,report_file,'F')
 verbose and DEBUG("HTML report generated")
