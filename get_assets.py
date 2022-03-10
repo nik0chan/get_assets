@@ -182,7 +182,7 @@ def url_analisys(host,address,folder_path):
 
            except Exception:
               verbose and ERROR('Np, DNS resolution not found for ' + fqdn + ' bypassing other tests')
-              result="KO" + str(fqdn) + ',' + str(IP) + ',-1,UNABLE TO RESOLVE DNS,,'
+              result="KO" + ',' + str(fqdn) + ',' + str(IP) + ',-1,UNABLE TO RESOLVE DNS,,'
 
            verbose and WARNING('DNS:' +str(dns_available) + ' HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
 
@@ -214,8 +214,9 @@ def dns_zone_xfer(address):
 # Retrieves all host entries form domain on a dictionary
     hosts = {}
     verbose and DEBUG("Identifying nameservers")
-    ns_answer = dns.resolver.resolve(address, 'NS')
-    for server in ns_answer:
+    try:
+      ns_answer = dns.resolver.resolve(address, 'NS')
+      for server in ns_answer:
         verbose and DEBUG("NS found: "+str(server))
         verbose and DEBUG("Identifying A entries")
         ip_answer = dns.resolver.resolve(server.target, 'A')
@@ -228,8 +229,11 @@ def dns_zone_xfer(address):
                     hosts[str(host)]=address
             except Exception as e:
                 verbose and ERROR("NS " + str(server) + "refused zone transfer, are you sure you have permission to transfer DNS zone?")
-
         continue
+    except Exception as e: 
+      ERROR('Performing zone transfer ' + str(e) + ' ocurred')
+      hosts="" 
+
     return hosts
 
 def generate_report(input_csv,output_html,report_type):
@@ -272,16 +276,17 @@ def generate_report(input_csv,output_html,report_type):
         url_to = row[4]
         snapshot = row[5]
         
-        if(report_type!='F' and status =="OK"):
+        if(report_type=='F' and status =="OK"):
            continue
 
-        if(report_type!='V' and status !="OK"):
+        if(report_type=='P' and status !="OK"):
            continue
 
         print("     <div class='row'>")
         print("         <div class='cell' data-title='ORIGINAL URL'>%s <BR> %s</div>" % (url_from,ip))
         if(cert_status == "0"):
-            print("         <div class='cell' data-title='CERTIFICATE STATUS'> <B>OK</B><BR>")
+          print("         <div class='cell' data-title='CERTIFICATE STATUS'> <B>OK</B><BR>")
+          try:
             context = ssl.create_default_context()
             with socket.create_connection((url_from, '443')) as sock:
                 with context.wrap_socket(sock, server_hostname=url_from) as ssock:
@@ -305,6 +310,9 @@ def generate_report(input_csv,output_html,report_type):
                     print(cert['notAfter'])
                     print("</div>")
             print("</div>")
+          except Exception as e:
+            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, " + str(e) + "</div>")
+
         elif (cert_status == "-1"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect domain</div>")
         elif (cert_status == "-2"):
@@ -345,8 +353,10 @@ try:
 
 except getopt.GetoptError:
     ERROR('Error unexpected input')
-    print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>]')
+    print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list> ] [--verbose --domain <domain> --host <host file list> --report V|F')
     sys.exit(2)
+
+domain = hosts_list = 0
 
 for opt, arg in opts:
     if opt in ('-v','--verbose'):
@@ -359,27 +369,23 @@ for opt, arg in opts:
     elif opt in ("-r", "--report"):
         report_type = arg
 
-try:
-    domain
-    verbose and DEBUG("Domain zone_transfer set")
-    folder_path = domain + "_report"
-    sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
+try: report_type 
+except: 
+    WARNING('Invalid report type specified, defaulting to all')
+    report_type='A'
 
-    if(report_type != 'F' and report_type != 'V'):
-       WARNING('Invalid report type specified, defaulting to all')
-       report_type='A'
-
-except NameError:
-    try:
-        hosts_list
-        verbose and DEBUG("Host list set")
-        folder_path = hosts_list + "_report"
-        sites_list=get_hosts_from_file(hosts_list)  # Obtain hosts from file
-
-    except NameError:
-        ERROR('Missing domain or hosts list file you have to specify at least one of them')
-        print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>]')
-        sys.exit(2)
+if(domain):
+  verbose and DEBUG("Domain zone_transfer set")
+  folder_path = domain + "_report"
+  sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
+elif(hosts_list): 
+  verbose and DEBUG("Host list set")
+  folder_path = hosts_list + "_report"
+  sites_list=get_hosts_from_file(hosts_list)  # Obtain hosts from file
+else: 
+  ERROR('Missing domain or hosts list file you have to specify at least one of them')
+  print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>]')
+  sys.exit(2)
 
 # Create folders structure
 Path(folder_path).mkdir(parents=True, exist_ok=True)
@@ -387,7 +393,7 @@ Path(folder_path+"/snapshots").mkdir(parents=True, exist_ok=True)
 os.popen('cp table.css ' + folder_path)
 os.popen('cp logo.png ' + folder_path)
 csv_file = folder_path + "/report.csv"
-report_file = folder_path + "/report.html"
+report_file = folder_path + "/index.html"
 
 verbose and DEBUG("Performing sites anlysis and generating CSV report")
 f = open(csv_file,'w')
@@ -400,5 +406,6 @@ for site in sites_list:
       verbose and WARNING("Bypassing " + site + " analysis due incorrect characters found.")
 f.close()
 verbose and DEBUG("CSV report generated")
-generate_report(csv_file,report_file,'F')
+
+generate_report(csv_file,report_file,report_type)
 verbose and DEBUG("HTML report generated")
