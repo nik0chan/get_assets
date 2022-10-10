@@ -20,6 +20,7 @@ import json
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.chrome.service import Service as ChromeService
 from selenium.webdriver.chrome.service import Service
 
 # FS operations
@@ -41,9 +42,12 @@ def url_snapshot(url,path):
         chrome_options.add_argument("--ignore-ssl-errors=yes")
         chrome_options.add_argument("--ignore-certificate-errors")
         chrome_options.add_argument("--no-sandbox")
+        chrome_options.add_argument('--disable-dev-shm-usage') 
         verbose and chrome_options.add_argument("--verbose")
         verbose and chrome_options.add_argument('--log-path=chromium.log')
-        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()),options=chrome_options)
+
+        service = ChromeService(executable_path="chromedriver", port=6666)
+        driver = webdriver.Chrome(service=service,options=chrome_options)
         driver.get("https://www.google.com")
         driver.set_page_load_timeout(30)        
         driver.set_window_size(1366,768)
@@ -163,7 +167,6 @@ def url_analisys(fqdn,folder_path):
                   snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
                   verbose and DEBUG("File stored on: " + snapshot_file)
                   secure, insecure = vulnerable_cipher(str(fqdn))
-                 # RCAMPOSF!!! Nico, afegeixo a resultat els ciphers segurs i insegurs, aixó hauria de fer que el programa al fer write escrigui una columna pels ciphers segurs i una altre columna pels insegurs i per tant després recollir la info on només printeja
                   result=str(fqdn) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file + ',' + secure + ',' + insecure
                
                else:
@@ -236,7 +239,6 @@ def generate_report(input_csv,output_html):
         cert_status = row[1]
         url_to = row[2]
         snapshot = row[3]
-        # RCAMPOSF!!! Aquí capturo les dos noves columnes del csv
         secure = row[4]
         insecure = row[5]
 
@@ -257,7 +259,6 @@ def generate_report(input_csv,output_html):
                     print("<br><B>Certificate expires on:</B><br>")    
                     print(cert['notAfter'])
             print("</div>")
-            # RCAMPOSF !!! Aquí creo el nou </div> on aniran els ciphers
             print("            <div class='cell' data-title='CIPHER SECURITY'> <B> CIPHER SEGURS ACCEPTATS:</B>")
             print("            <br>" + secure)
             print("            </div>")
