@@ -322,7 +322,7 @@ def vulnerable_cipher(url_from):
 
 # Main 
 try: 
-    opts, args = getopt.getopt(sys.argv[1:],"vd:l:u:p:",["verbose","domain=","report_pcath"])
+    opts, args = getopt.getopt(sys.argv[1:],"vd:l:u:p:",["verbose","domain=","report_path"])
 
 except getopt.GetoptError: 
     ERROR('Error unexpected input')
@@ -345,7 +345,7 @@ for opt, arg in opts:
 try: 
     domain  
     verbose and DEBUG("Domain set, performing zone_transfer query") 
-    folder_path = base_path + "/" + domain + "_report"
+    folder_path = base_path + "/" + domain
     sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
     
 except NameError: 
@@ -353,7 +353,7 @@ except NameError:
     try: 
         hosts_list
         verbose and DEBUG("Host list set, performing text file list analysis")
-        folder_path = base_path + "/" + hosts_list + "_report"
+        folder_path = base_path + "/" + hosts_list
         sites_list=get_hosts_from_file(hosts_list)  # Obtain hosts from file
 
     except NameError: 
@@ -361,7 +361,7 @@ except NameError:
         try: 
             verbose and DEBUG("URL is set, performing single URL analysis")
             sites_list = url.split() 
-            folder_path = base_path + "/" + url + "_report"
+            folder_path = base_path + "/" + url
             verbose and DEBUG("URL is set, performing single URL analysis")
 
         except NameError: 
