@@ -91,7 +91,7 @@ def follow(url):
 def verify_ssl(url):
 # Verify if SSL certificate for URL is correct 
     val = 0
-    verbose and DEBUG('Performing SSL analysis for ' + str(url))
+    verbose and DEBUG('TEST 3: Performing SSL analysis for ' + str(url))
     url = "https://" + url
     try:       
         headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36',
@@ -99,24 +99,23 @@ def verify_ssl(url):
         }
         r = requests.get(url, headers=headers)
         if (r.status_code != requests.codes.ok):
-            ERROR("Incorrect domain! status code was " + str(r.status_code))
+            ERROR("FAIL: Incorrect domain! status code was " + str(r.status_code))
             val = -1 
         else:
             verbose and DEBUG('Certificate configured at ' + url + ' is OK')
 
     except Exception as error:
         if "doesn't match" in str(error):
-            ERROR("Certificate doesn't match domain name")
+            ERROR("FAIL: Certificate doesn't match domain name")
             val = -2
         elif "certificate has expired" in str(error):
-            ERROR("Certificate has expired")
+            ERROR("FAIL: Certificate has expired")
             val = -3
         elif "Errno 111" in str(error):
-            ERROR("Connection refused")
+            ERROR("FAIL: Connection refused")
             val = -4
         else: 
-            ERROR("" + str(error))
-            ERROR("Unknown error")
+            ERROR("FAIL: Unknown error: " + str(error))
             val = -5
     
     return val
@@ -127,7 +126,7 @@ def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
     return not bool(search(strg))
 
 def url_analisys(fqdn,folder_path):
-# Performs triple analysis for URL, redirects, certificate validation, and image dump
+# Performs test for URL, redirects, certificate validation, and image dump
     try:
         result = -1
         if  charset_ok(fqdn):
@@ -138,32 +137,34 @@ def url_analisys(fqdn,folder_path):
            http_location = (fqdn,80)
            https_location = (fqdn,443)
 
-           verbose and DEBUG('Has ' + fqdn + ' DNS resolution and has 80 or 443 connection available ?')
+           verbose and DEBUG('TEST 1: Has ' + fqdn + ' DNS resolution and 80 port is reachable ?')
            try: 
                http_available = http_socket.connect_ex(http_location)
            except socket.gaierror:
-               verbose and ERROR('DNS resolution not found for ' + fqdn)
+               verbose and ERROR('FAIL: DNS resolution not found for ' + fqdn + '?')
                result=str(fqdn) + ',-1,DNS ERROR,,,'
            except socket.timeout:
                http_available = -1
-               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 80 (http) port')      
-               
-           verbose and DEBUG('Is port 443 reachable on ' + fqdn + '?')
+               verbose and DEBUG('FAIL: Unable to connect to ' + fqdn + 'using 80 (http) port')
+      
+           verbose and DEBUG('YES: ' + fqdn + ' is reachable via 80 port')    
+           verbose and DEBUG('TEST 2: Is port 443 reachable on ' + fqdn + '?')
            try: 
                https_available = https_socket.connect_ex(https_location)
+               verbose and DEBUG('YES: port 443 is reachable')
                ssl_status=verify_ssl(fqdn)     # Verify SSL Status 
            except socket.timeout:
                https_available = -1
                verbose and DEBUG('Unable to connect to ' + fqdn + 'using 443 (http) port')
 
-           verbose and DEBUG('HTTP:' + str(http_available) + ' HTTPS: ' + str(https_available))
-
            if http_available==0 or https_available==0: 
                url = "http://" + fqdn
+               verbose and DEBUG('TEST 4: Is ' + url + ' a final URL or is redirected ?')
                verbose and DEBUG("Finding final URL for: " + url )
 
                final_url=follow(url)
                if final_url != -1 :                   
+                  verbose and DEBUG('TEST 5: Getting webpage snapshot')
                   snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
                   verbose and DEBUG("File stored on: " + snapshot_file)
                   secure, insecure = vulnerable_cipher(str(fqdn))
@@ -176,7 +177,10 @@ def url_analisys(fqdn,folder_path):
             WARNING('Skipping ' + str(fqdn) + ' due incorrect character found')
 
     except Exception as e:
+        verbose and ERROR("Error ocurred analysing " + str(fqdn) + " site")
+        verbose and ERROR(str(e))
         result=str(fqdn) + ',-1,DNS ERROR,,,'
+
     return result    
 
 def dns_zone_xfer(address):
@@ -222,13 +226,15 @@ def generate_report(input_csv,output_html):
     print("<body>")
     print("<div class='middle'>")
     print("  <img class=logo src=logo.png alt='LOGO'>")
-    print("  <span class='title'>Domain analysis report </span>")
+    print("  <span class='title'>Nik0chaN's web analysis report </span>")
     print("</div>")
     print("<div class='wrapper'>")
     print(" <div class='table'>")
     print("     <div class='row header blue'>")
     print("         <div class='cell'>ORIGINAL URL</div>")
     print("         <div class='cell'>CERTIFICATE STATUS</div>")
+    print("         <div class='cell'>SECURE CYPHERS</div>")
+    print("         <div class='cell'>INSECURE CYPHERS</div>")
     print("         <div class='cell'>FINAL URL</div>")
     print("         <div class='cell'>SNAPSHOT</div>")
     print("     </div> <!-- End row header -->")
@@ -258,13 +264,13 @@ def generate_report(input_csv,output_html):
                     print(issuer['organizationName']+'<br>')
                     print("<br><B>Certificate expires on:</B><br>")    
                     print(cert['notAfter'])
-            print("</div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'> <B> CIPHER SEGURS ACCEPTATS:</B>")
-            print("            <br>" + secure)
-            print("            </div>")
-            print("            <div class='cell' data-title='CIPHER INSECURITY'> <B> CIPHER INSEGURS ACCEPTATS:</B>")
-            print("            <br>" + insecure)
-            print("            </div>")
+                    print("</div>")
+                    print("            <div class='cell' data-title='CIPHER SECURITY'> <B> CIPHER SEGURS ACCEPTATS:</B>")
+                    print("            <br>" + secure)
+                    print("            </div>")
+                    print("            <div class='cell' data-title='CIPHER INSECURITY'> <B> CIPHER INSEGURS ACCEPTATS:</B>")
+                    print("            <br>" + insecure)
+                    print("            </div>")
         elif (cert_status == "-1"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect domain</div>")
         elif (cert_status == "-2"):
@@ -299,26 +305,32 @@ def get_hosts_from_file(file):
 
     return hosts
 
-# Function that checks all the ciphers the url accepts, then it creates a string with all the secure ones and another with the vulnerable ones
-def vulnerable_cipher(url_from):
+def vulnerable_cipher(fqdn):
+    # Function that checks all the ciphers the url accepts, then it creates a string with all the secure ones and another with the vulnerable ones
     # First we use sslscan feature, that give us the info we need about the ciphers in the host. Grep to reduce the info into an auxiliar .txt
-    list = os.system("sslscan " + hostname + "| grep 'Accepted\|Preferred' > codecs.txt")
-    file = open("codecs.txt", "r")
+    #list = os.system("sslscan " + fqdn + "| grep 'Accepted\|Preferred' > /tmp/codecs.txt")
+    list = os.system("sslscan --no-check-certificate --no-cipher-details --no-ciphersuites --no-compression --no-groups --no-heartbleed --no-renegotiation " + fqdn + " |  grep enabled | tr '\n' > /tmp/protocols.txt")
+    file = open("/tmp/protocols.txt", "r")
     # Strings that will save the secure codecs and the vulnerables ones
-    segurs = ""
-    vulnerables = ""
+    secure = insecure = "" 
     # For every line in the file we check the version: If version > TLSv1.2 its insecure
+    verbose and DEBUG("TEST 6: Checking certificate cyphers")
     for cipher in file:
-        if "TLSv1.1" in cipher or "TLSv1.0" in cipher or "SSLv3" in cipher:
-            vulnerables = vulnerables + cipher
+        #if "TLSv1.1" in cipher or "TLSv1.0" in cipher or "SSLv3" in cipher:
+        #    insecure = insecure + cipher
         # sslscan also format the output when it finds and insecure cipher using the yellow color, that matches 33m, so if we get that in the input we
         # can consider it also not secure at all
+        #else:
+        verbose and DEBUG("Analyzing: " + cipher) 
+        if "32m" in cipher:
+            secure = secure + cipher[0:cipher.find(' ')]
         else:
-            if "33m" in cipher:
-                vulnerables = vulnerables + cipher
-            else:
-                segurs = segurs + cipher
-    return segur, cipher
+            insecure = insecure + cipher[0:cipher.find(' ')]
+
+    verbose and DEBUG("SECURE CYPHERS: " + str(secure))
+    verbose and DEBUG("NON SECURE CYPHERS: " + str(insecure))
+    file.close()
+    return secure, insecure
 
 # Main 
 try: 
@@ -373,20 +385,22 @@ except NameError:
 # Create folders structure
 Path(folder_path).mkdir(parents=True, exist_ok=True)
 Path(folder_path+"/snapshots").mkdir(parents=True, exist_ok=True)
-os.popen('cp table.css ' + folder_path) 
-os.popen('cp logo.png ' + folder_path)
+
+#os.popen('cp table.css ' + folder_path) 
+#os.popen('cp logo.png ' + folder_path)
 csv_file = folder_path + "/report.csv"
 report_file = folder_path + "/report.html"
 
-verbose and DEBUG("Starting")
+verbose and DEBUG("Starting tests")
 f = open(csv_file,'w')
 for site in sites_list:
-    verbose and print(site)
-    verbose and print(sites_list)
-    verbose and print(folder_path)
+    verbose and DEBUG("Testing site: " + site)
     result=url_analisys(site,folder_path)    
-    verbose and print("ok")
+    verbose and DEBUG("Site analysis finished to " + site + " result was: " + str(result))
     if result != -1:
        f.write(result + "\n")
+
 f.close()
-generate_report(csv_file,report_file) 
+verbose and DEBUG("Generting report")
+generate_report(csv_file,report_file)
+verbose and DEBUG("Report finished") 
