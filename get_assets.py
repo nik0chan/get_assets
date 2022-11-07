@@ -478,7 +478,7 @@ for site in sites_list:
 
 f.close()
 verbose and DEBUG("Generting report")
-os.popen('cp table.css ' + folder_path) 
-os.popen('cp logo.png ' + folder_path)
+os.popen('cp /get_assets/table.css ' + folder_path) 
+os.popen('cp /get_assets/logo.png ' + folder_path)
 generate_report(csv_file,report_file)
 verbose and DEBUG("Report finished")
