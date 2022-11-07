@@ -1,20 +1,24 @@
 #!/usr/bin/python 
 import re
 from dns.exception import Timeout
-import dns.zone
-import dns.resolver
+import dns.zone                                                                                                                                             
+import dns.resolver                                                                                                                                         
 import dns.name
+import json
 import requests
 import getopt
+# DNS Resolution
 import socket
 import sys
 import os
 
+# SSL Renegotiation (Lecagy)
+import urllib3 
+from urllib3.util.ssl_ import create_urllib3_context 
+
 # Test SSL
 from urllib.request import Request, urlopen, ssl, socket
 from urllib.error import URLError, HTTPError
-
-import json
 
 # Snapshot web
 from selenium import webdriver
@@ -33,10 +37,28 @@ def ERROR(msg): print("\033[91m {}\033[00m" .format("[ERROR] " + "\033[93m" + ms
 def WARNING(msg): print("\033[93m {}\033[00m" .format("[WARNING] " + "\033[35m" + msg))
 def DEBUG(msg): print("\033[92m {}\033[00m" .format("[DEBUG] " + "\033[36m" + msg))
 
+class CustomHttpAdapter (requests.adapters.HTTPAdapter):
+    # "Transport adapter" that allows us to use custom ssl_context.
+
+    def __init__(self, ssl_context=None, **kwargs):
+        self.ssl_context = ssl_context
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self.poolmanager = urllib3.poolmanager.PoolManager(
+            num_pools=connections, maxsize=maxsize,
+            block=block, ssl_context=self.ssl_context)
+
+def get_legacy_session():
+    ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+    ctx.options |= 0x4  # OP_LEGACY_SERVER_CONNECT
+    session = requests.session()
+    session.mount('https://', CustomHttpAdapter(ctx))
+    return session
+
 def url_snapshot(url,path):
 # Get a web snapshot 
     try:
-        verbose and DEBUG("Getting snapshot for URL: " + str(url) + " to path: " + path)
         chrome_options = Options()
         chrome_options.add_argument("--headless")
         chrome_options.add_argument("--ignore-ssl-errors=yes")
@@ -57,6 +79,7 @@ def url_snapshot(url,path):
         verbose and DEBUG("Ouput file: " + output_file)
         driver.save_screenshot(path + output_file)
         driver.close()
+        verbose and DEBUG("TEST 5 (GET URL SNAPSHOT) STORED ON: " + path + output_file)
     except Exception as e:
         ERROR('' + str(e))
         output_file = -1
@@ -67,31 +90,35 @@ def follow(url):
 # Test if an url is redirected 
     try:
       verbose and DEBUG("Analyzing " + str(url) + " URL")
-      headers = {'User-Agent': 'Mozilla/5.0 (MyOS; MyArch) get_assets/1.0 (KHTML, like Gecko) Selenium/Chromium/some_version',
-                 'referer': str(url)  
-      }  
+      headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:105.0) Gecko/20100101 Firefox/105.0',
+                 'referer': str(url)
+      }
       response = requests.get(url, timeout=10, headers=headers)
       verbose and DEBUG("STATUS CODE: " + str(response.status_code))
       verbose and DEBUG("URL: " + response.url)
-            
+
       if response.history:
          verbose and DEBUG("URL " + url + " was redirected")
          for resp in response.history:
-                verbose and DEBUG("Final URL -> " + response.url)
+                verbose and DEBUG("TEST 4 (GET FINAL URL) -> " + response.url)
                 return str(response.url)
 
       else:
-         verbose and DEBUG("URL " + url + " was NOT redirected")    
+         verbose and DEBUG("URL " + url + " was NOT redirected")
          return str(response.url)
-    
-    except Exception as e:
-        verbose and  ERROR('shit! '+str(e))
-        return -1
+
+    except Exception as error:
+        if "UNSAFE_LEGACY_RENEGOTIATION_DISABLED" in str(error):
+           return get_legacy_session().get(url)
+        else:
+           verbose and ERROR('shit! '+str(e))
+
+    return -1
 
 def verify_ssl(url):
 # Verify if SSL certificate for URL is correct 
     val = 0
-    verbose and DEBUG('TEST 3: Performing SSL analysis for ' + str(url))
+    verbose and DEBUG('TEST 3.1: Performing SSL analysis for ' + str(url))
     url = "https://" + url
     try:       
         headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36',
@@ -114,9 +141,24 @@ def verify_ssl(url):
         elif "Errno 111" in str(error):
             ERROR("FAIL: Connection refused")
             val = -4
+        elif "UNSAFE_LEGACY_RENEGOTIATION_DISABLED" in str(error):
+            verbose and WARNING("WARNING: Unsafe renegotation is disabled on server workarrounding")
+            ctx = create_urllib3_context()
+            ctx.load_default_certs()
+            ctx.options |= 0x4  # ssl.OP_LEGACY_SERVER_CONNECT
+
+            with urllib3.PoolManager(ssl_context=ctx) as http:
+               r = http.request("GET", url)
+               verbose and DEBUG("GET RESULT: " + str(r))
+               if (r.status == 200 or r.status==301):
+                   verbose and DEBUG("SSL connection OK")
+                   val = 0
+               else: 
+                   ERROR("FAIL: Unsafe renegotation disabled")
+                   val = -5
         else: 
             ERROR("FAIL: Unknown error: " + str(error))
-            val = -5
+            val = -99
     
     return val
 
@@ -127,59 +169,80 @@ def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
 
 def url_analisys(fqdn,folder_path):
 # Performs test for URL, redirects, certificate validation, and image dump
+    ssl_status = "KO"
+    final_url = "UNABLE TO DETERMINE"
+    snapshot_file = ""   
+    secure = "UNABLE TO DETERMINE"
+    insecure = "UNABLE TO DETERMINE"
+    certnames = "UNABLE TO DETERMINE"
+    issuer = "UNABLE TO DETERMINE"
+    expiry = "UNABLE TO DETERMINE"
+    http_available = 0 
+    https_available = 0 
+
     try:
         result = -1
-        if  charset_ok(fqdn):
-           http_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-           http_socket.settimeout(5)
-           https_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-           https_socket.settimeout(5)
-           http_location = (fqdn,80)
-           https_location = (fqdn,443)
+        if  charset_ok(fqdn):  
+           # DNS ANALYSIS
+           try:
+             socket.getaddrinfo(fqdn,80)
+             verbose and DEBUG("TEST 1 (CHECK DNS/IP RESOLUTION): OK")
+             
+             http_location = (fqdn,80)
+             https_location = (fqdn,443)
 
-           verbose and DEBUG('TEST 1: Has ' + fqdn + ' DNS resolution and 80 port is reachable ?')
-           try: 
-               http_available = http_socket.connect_ex(http_location)
-           except socket.gaierror:
-               verbose and ERROR('FAIL: DNS resolution not found for ' + fqdn + '?')
-               result=str(fqdn) + ',-1,DNS ERROR,,,'
-           except socket.timeout:
-               http_available = -1
-               verbose and DEBUG('FAIL: Unable to connect to ' + fqdn + 'using 80 (http) port')
-      
-           verbose and DEBUG('YES: ' + fqdn + ' is reachable via 80 port')    
-           verbose and DEBUG('TEST 2: Is port 443 reachable on ' + fqdn + '?')
-           try: 
-               https_available = https_socket.connect_ex(https_location)
-               verbose and DEBUG('YES: port 443 is reachable')
-               ssl_status=verify_ssl(fqdn)     # Verify SSL Status 
-           except socket.timeout:
-               https_available = -1
-               verbose and DEBUG('Unable to connect to ' + fqdn + 'using 443 (http) port')
+             # IS PORT 80 REACHABLE 
+             try:
+               url_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+               url_socket.settimeout(5)
+               http_available = url_socket.connect_ex(http_location)
+               verbose and DEBUG('TEST 2 (CHECK PORT 80 REACHABLE): YES')
 
-           if http_available==0 or https_available==0: 
-               url = "http://" + fqdn
-               verbose and DEBUG('TEST 4: Is ' + url + ' a final URL or is redirected ?')
-               verbose and DEBUG("Finding final URL for: " + url )
-
-               final_url=follow(url)
-               if final_url != -1 :                   
-                  verbose and DEBUG('TEST 5: Getting webpage snapshot')
-                  snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
-                  verbose and DEBUG("File stored on: " + snapshot_file)
+               # IS PORT 443 REACHABLE   
+               verbose and DEBUG('TEST 3 (CHECK PORT 443 REACHABLE): YES')
+               try:
+                  https_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                  https_socket.settimeout(5)
+                  https_available = https_socket.connect_ex(https_location)
+                  # CHECK SSL STATUS
+                  ssl_status=verify_ssl(fqdn)    
+                  # GET SECURE AND INSECURE CYPHERS
                   secure, insecure = vulnerable_cipher(str(fqdn))
-                  result=str(fqdn) + ',' + str(ssl_status) + ',' + str(final_url) + ',' + 'snapshots/' + snapshot_file + ',' + secure + ',' + insecure
-               
-               else:
-                  verbose and DEBUG('Skipping ' + fqdn + ' due to unable to connect to 80 nor 443 port')
-                  result = -1 
-        else:
-            WARNING('Skipping ' + str(fqdn) + ' due incorrect character found')
 
-    except Exception as e:
+               except socket.timeout: # check port 443 connection error
+                  https_available = -1
+                  verbose and WARNING('Timeout connecting to ' + fqdn + 'using 443 (http) port')
+
+             except socket.timeout: # check port 80 connection error
+               http_available = -1
+               verbose and WARNING('Timeout connecting to ' + fqdn + 'using 80 (http) port')
+
+           except Exception as error: # check dns resolution error
+               if error.args[0] == '-2' : 
+                   ERROR('Unable to resolve name, URL analysis stopped')
+               else :
+                   ERROR('Unhandled error, URL analysis stopped' + str(error))
+
+
+        else: # charset test error on address 
+            ERROR('Skipping ' + str(fqdn) + ' due incorrect character found')
+
+        
+        if http_available==0 or https_available==0: 
+           # GET FINAL URL 
+           url = "http://" + fqdn
+           final_url=follow(url)
+           # GET WEBPAGE SNAPSHOT
+           if final_url != -1 :                   
+              snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
+              verbose and DEBUG("File stored on: " + snapshot_file)
+
+    except Exception as e: # UNHANDLED EXCEPTION 
         verbose and ERROR("Error ocurred analysing " + str(fqdn) + " site")
         verbose and ERROR(str(e))
-        result=str(fqdn) + ',-1,DNS ERROR,,,'
+
+    result=fqdn + ',' + str(ssl_status) + ',' + final_url, ',' + secure + ',' + insecure + ',' + snapshot_file + ',' + certnames + ',' + issuer + ',' + expiry 
+    verbose and DEBUG('URL analysis ended, result: ') and print(result)
 
     return result    
 
@@ -238,8 +301,9 @@ def generate_report(input_csv,output_html):
     print("         <div class='cell'>FINAL URL</div>")
     print("         <div class='cell'>SNAPSHOT</div>")
     print("     </div> <!-- End row header -->")
-
+ 
     for line in infile:
+
         row = line.split(",")
         url_from = row[0]
         cert_status = row[1]
@@ -247,44 +311,58 @@ def generate_report(input_csv,output_html):
         snapshot = row[3]
         secure = row[4]
         insecure = row[5]
+        certnames = row[6]
+        issuer = row[7]
+        expiration = row[8]
 
         print("     <div class='row'>")
         print("         <div class='cell' data-title='ORIGINAL URL'>%s</div>" % url_from)
         if(cert_status == "0"):
             print("         <div class='cell' data-title='CERTIFICATE STATUS'> <B>OK</B><BR>")
-            context = ssl.create_default_context()
-            with socket.create_connection((url_from, '443')) as sock:
-                with context.wrap_socket(sock, server_hostname=url_from) as ssock:
-                    cert = ssock.getpeercert()  
-                    print("<br><b> CERTIFICATE NAMES</b> <br>")    
-                    for san in cert['subjectAltName']:
-                        print(san[1] + '<br>')
-                    print("<br><B>CERTIFICATE ISSUER:</B> <br>")    
-                    issuer = dict(item[0] for item in cert['issuer'])            
-                    print(issuer['organizationName']+'<br>')
-                    print("<br><B>Certificate expires on:</B><br>")    
-                    print(cert['notAfter'])
-                    print("</div>")
-                    print("            <div class='cell' data-title='CIPHER SECURITY'> <B> CIPHER SEGURS ACCEPTATS:</B>")
-                    print("            <br>" + secure)
-                    print("            </div>")
-                    print("            <div class='cell' data-title='CIPHER INSECURITY'> <B> CIPHER INSEGURS ACCEPTATS:</B>")
-                    print("            <br>" + insecure)
-                    print("            </div>")
+            print("              <br><b> CERTIFICATE NAMES</b> <br>")    
+            for san in certnames.split():
+                print(san[1] + '<br>')
+                 
+            print("<br><B>CERTIFICATE ISSUER:</B> <br>")    
+            print(issuer+ '<br>')
+            print("<br><B>Certificate expires on:</B><br>")    
+            print(expiration)
+            print("</div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'> <B> CIPHER SEGURS ACCEPTATS:</B>")
+            print("            <br>" + secure)
+            print("            </div>")
+            print("            <div class='cell' data-title='CIPHER INSECURITY'> <B> CIPHER INSEGURS ACCEPTATS:</B>")
+            print("            <br>" + insecure)
+            print("            </div>")
         elif (cert_status == "-1"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect domain</div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
         elif (cert_status == "-2"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Name error</div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
         elif (cert_status == "-3"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Expired</div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
         elif (cert_status == "-4"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Refused connection</div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
         elif (cert_status == "-5"):
             print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Unknown error </div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
+            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
 
         print("         <div class='cell' data-title='FINAL URL'>%s</div>" % url_to)
-        print("         <div class='cell' data-title='ORIGINAL URL'><img src='%s' alt='No preview available' class='img'></div>" % snapshot)
-        print("     </div><!-- End row -->") # Row
+
+        if (snapshot == "UNABLE TO TEST"):
+           print("         <div class='cell' data-title='ORIGINAL URL'>NO PREVIEW AVAILABLE</div>")
+        else:
+           print("         <div class='cell' data-title='ORIGINAL URL'><img src='%s' alt='PREVIEW' class='img'></div>" % snapshot)
+           
+    print("     </div><!-- End row -->") # Row
     print(" </div><!-- End table -->")  # Table 
     print("</div><!-- End Wrapper -->")  # Wrapper
     print("</body>")
@@ -314,7 +392,7 @@ def vulnerable_cipher(fqdn):
     # Strings that will save the secure codecs and the vulnerables ones
     secure = insecure = "" 
     # For every line in the file we check the version: If version > TLSv1.2 its insecure
-    verbose and DEBUG("TEST 6: Checking certificate cyphers")
+    verbose and DEBUG("TEST 3.2: Checking certificate cyphers")
     for cipher in file:
         #if "TLSv1.1" in cipher or "TLSv1.0" in cipher or "SSLv3" in cipher:
         #    insecure = insecure + cipher
@@ -386,10 +464,8 @@ except NameError:
 Path(folder_path).mkdir(parents=True, exist_ok=True)
 Path(folder_path+"/snapshots").mkdir(parents=True, exist_ok=True)
 
-#os.popen('cp table.css ' + folder_path) 
-#os.popen('cp logo.png ' + folder_path)
 csv_file = folder_path + "/report.csv"
-report_file = folder_path + "/report.html"
+report_file = folder_path + "/index.html"
 
 verbose and DEBUG("Starting tests")
 f = open(csv_file,'w')
@@ -398,9 +474,11 @@ for site in sites_list:
     result=url_analisys(site,folder_path)    
     verbose and DEBUG("Site analysis finished to " + site + " result was: " + str(result))
     if result != -1:
-       f.write(result + "\n")
+       f.write(''.join(result) + '\n')
 
 f.close()
 verbose and DEBUG("Generting report")
+os.popen('cp table.css ' + folder_path) 
+os.popen('cp logo.png ' + folder_path)
 generate_report(csv_file,report_file)
-verbose and DEBUG("Report finished") 
+verbose and DEBUG("Report finished")
