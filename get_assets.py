@@ -1,8 +1,8 @@
 #!/usr/bin/python 
 import re
 from dns.exception import Timeout
-import dns.zone                                                                                                                                             
-import dns.resolver                                                                                                                                         
+import dns.zone
+import dns.resolver
 import dns.name
 import json
 import requests
@@ -71,7 +71,7 @@ def url_snapshot(url,path):
         service = ChromeService(executable_path="chromedriver", port=6666)
         driver = webdriver.Chrome(service=service,options=chrome_options)
         driver.get("https://www.google.com")
-        driver.set_page_load_timeout(30)        
+        driver.set_page_load_timeout(10)        
         driver.set_window_size(1366,768)
         driver.get(url)
         output_file = str(url).replace('https://', '').replace('http://','').replace('/','')
@@ -87,13 +87,14 @@ def url_snapshot(url,path):
     return output_file
 
 def follow(url):
-# Test if an url is redirected 
+# Test if an url is redirected
+    final_url = "UNABLE TO DETERMINE" 
     try:
       verbose and DEBUG("Analyzing " + str(url) + " URL")
       headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:105.0) Gecko/20100101 Firefox/105.0',
                  'referer': str(url)
       }
-      response = requests.get(url, timeout=10, headers=headers)
+      response = requests.get(url, headers=headers)
       verbose and DEBUG("STATUS CODE: " + str(response.status_code))
       verbose and DEBUG("URL: " + response.url)
 
@@ -101,7 +102,7 @@ def follow(url):
          verbose and DEBUG("URL " + url + " was redirected")
          for resp in response.history:
                 verbose and DEBUG("TEST 4 (GET FINAL URL) -> " + response.url)
-                return str(response.url)
+                final_url = str(response.url)
 
       else:
          verbose and DEBUG("URL " + url + " was NOT redirected")
@@ -109,27 +110,47 @@ def follow(url):
 
     except Exception as error:
         if "UNSAFE_LEGACY_RENEGOTIATION_DISABLED" in str(error):
-           return get_legacy_session().get(url)
+            response=get_legacy_session().get(url)
+            verbose and DEBUG("URL " + url + " was NOT redirected")
+            finral_url = response.url
         else:
-           verbose and ERROR('shit! '+str(e))
+           verbose and ERROR('UNEXPECTED ERROR', +str(e))
 
-    return -1
+    return response.url 
 
 def verify_ssl(url):
 # Verify if SSL certificate for URL is correct 
     val = 0
+    certnames = 'UNABLE TO DETERMINE'
+    issuer = 'UNABLE TO DETERMINE'
+    expiry = 'UNABLE TO DETERMINE' 
+
     verbose and DEBUG('TEST 3.1: Performing SSL analysis for ' + str(url))
-    url = "https://" + url
+    #url = "https://" + url
     try:       
         headers = {'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.131 Safari/537.36',
-                   'referer': str(url)
+                'referer': 'https://' + str(url)
         }
-        r = requests.get(url, headers=headers)
+        r = requests.get('https://' + str(url), headers=headers)
         if (r.status_code != requests.codes.ok):
             ERROR("FAIL: Incorrect domain! status code was " + str(r.status_code))
             val = -1 
         else:
+            context = ssl.create_default_context()
+            with socket.create_connection((url, '443')) as sock:
+              with context.wrap_socket(sock, server_hostname=url) as ssock:
+                  cert = ssock.getpeercert()
+                  certnames=""
+                  for san in cert['subjectAltName']:
+                        certnames = certnames + san[1] + ' '
+                  issuer = dict(item[0] for item in cert['issuer'])
+                  issuer = str(issuer['organizationName']).replace(',', '')
+                  expiry = cert['notAfter']
+
             verbose and DEBUG('Certificate configured at ' + url + ' is OK')
+            verbose and DEBUG('Certificate names ' + str(certnames))
+            verbose and DEBUG('Issuer ' + str(issuer))
+            verbose and DEBUG('Not valid after ' + expiry)
 
     except Exception as error:
         if "doesn't match" in str(error):
@@ -142,25 +163,38 @@ def verify_ssl(url):
             ERROR("FAIL: Connection refused")
             val = -4
         elif "UNSAFE_LEGACY_RENEGOTIATION_DISABLED" in str(error):
-            verbose and WARNING("WARNING: Unsafe renegotation is disabled on server workarrounding")
+            verbose and WARNING("UPS: Unsafe renegotation is disabled on server workarrounding")
             ctx = create_urllib3_context()
             ctx.load_default_certs()
             ctx.options |= 0x4  # ssl.OP_LEGACY_SERVER_CONNECT
 
             with urllib3.PoolManager(ssl_context=ctx) as http:
-               r = http.request("GET", url)
-               verbose and DEBUG("GET RESULT: " + str(r))
+               r = http.request("GET", url, timeout=5)
                if (r.status == 200 or r.status==301):
                    verbose and DEBUG("SSL connection OK")
                    val = 0
+                   with socket.create_connection((url, '443')) as sock:
+                     with ctx.wrap_socket(sock, server_hostname=url) as ssock:
+                       cert = ssock.getpeercert()
+                       certnames=""
+                       for san in cert['subjectAltName']:
+                          certnames = certnames + san[1] + ' '
+                       issuer = dict(item[0] for item in cert['issuer'])
+                       issuer = str(issuer['organizationName']).replace(',', '')
+                       expiry = cert['notAfter']
+
+                   verbose and DEBUG('Certificate configured at ' + url + ' is OK')
+                   verbose and DEBUG('Certificate names ' + str(certnames))
+                   verbose and DEBUG('Issuer ' + str(issuer))
+                   verbose and DEBUG('Not valid after ' + expiry)
                else: 
                    ERROR("FAIL: Unsafe renegotation disabled")
                    val = -5
         else: 
             ERROR("FAIL: Unknown error: " + str(error))
             val = -99
-    
-    return val
+   
+    return str(val), certnames, issuer, expiry 
 
 def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
 # Verify if chars on URL are permitted 
@@ -177,8 +211,8 @@ def url_analisys(fqdn,folder_path):
     certnames = "UNABLE TO DETERMINE"
     issuer = "UNABLE TO DETERMINE"
     expiry = "UNABLE TO DETERMINE"
-    http_available = 0 
-    https_available = 0 
+    http_available = -1 
+    https_available = -1 
 
     try:
         result = -1
@@ -197,7 +231,7 @@ def url_analisys(fqdn,folder_path):
                url_socket.settimeout(5)
                http_available = url_socket.connect_ex(http_location)
                verbose and DEBUG('TEST 2 (CHECK PORT 80 REACHABLE): YES')
-
+               http_available = 1
                # IS PORT 443 REACHABLE   
                verbose and DEBUG('TEST 3 (CHECK PORT 443 REACHABLE): YES')
                try:
@@ -205,30 +239,28 @@ def url_analisys(fqdn,folder_path):
                   https_socket.settimeout(5)
                   https_available = https_socket.connect_ex(https_location)
                   # CHECK SSL STATUS
-                  ssl_status=verify_ssl(fqdn)    
+                  ssl_status, certnames, issuer, expiry=verify_ssl(fqdn)    
                   # GET SECURE AND INSECURE CYPHERS
                   secure, insecure = vulnerable_cipher(str(fqdn))
-
+                  https_available = 1 
                except socket.timeout: # check port 443 connection error
-                  https_available = -1
                   verbose and WARNING('Timeout connecting to ' + fqdn + 'using 443 (http) port')
 
              except socket.timeout: # check port 80 connection error
-               http_available = -1
                verbose and WARNING('Timeout connecting to ' + fqdn + 'using 80 (http) port')
 
            except Exception as error: # check dns resolution error
-               if error.args[0] == '-2' : 
-                   ERROR('Unable to resolve name, URL analysis stopped')
-               else :
-                   ERROR('Unhandled error, URL analysis stopped' + str(error))
-
+               if "ReadTimeoutError" in str(error):
+                   ERROR('ABORTING. Timeout reached, maybe down? maybe firewalled?')  
+                   return fqdn + ',' + '-1' + ',' + 'TIMEOUT CONNECTING' + ',' + secure + ',' + insecure + ',' + snapshot_file + ',' + certnames + ',' + issuer + ',' + expiry 
+               elif "Name does not resolve" in str(error) :
+                   ERROR('ABORTING. Unable to resolve name')
+                   return fqdn + ',' + '-1' + ',' + 'UNABLE TO RESOLVE NAME' + ',' + secure + ',' + insecure + ',' + snapshot_file + ',' + certnames + ',' + issuer + ',' + expiry
 
         else: # charset test error on address 
             ERROR('Skipping ' + str(fqdn) + ' due incorrect character found')
 
-        
-        if http_available==0 or https_available==0: 
+        if http_available or https_available: 
            # GET FINAL URL 
            url = "http://" + fqdn
            final_url=follow(url)
@@ -241,9 +273,8 @@ def url_analisys(fqdn,folder_path):
         verbose and ERROR("Error ocurred analysing " + str(fqdn) + " site")
         verbose and ERROR(str(e))
 
-    result=fqdn + ',' + str(ssl_status) + ',' + final_url, ',' + secure + ',' + insecure + ',' + snapshot_file + ',' + certnames + ',' + issuer + ',' + expiry 
+    result=fqdn + ',' + str(ssl_status) + ',' + str(final_url), ',' + secure + ',' + insecure + ',' + snapshot_file + ',' + certnames + ',' + issuer + ',' + expiry 
     verbose and DEBUG('URL analysis ended, result: ') and print(result)
-
     return result    
 
 def dns_zone_xfer(address):
@@ -308,9 +339,9 @@ def generate_report(input_csv,output_html):
         url_from = row[0]
         cert_status = row[1]
         url_to = row[2]
-        snapshot = row[3]
+        insecure = row[3]
         secure = row[4]
-        insecure = row[5]
+        snapshot = row[5]
         certnames = row[6]
         issuer = row[7]
         expiration = row[8]
@@ -321,7 +352,7 @@ def generate_report(input_csv,output_html):
             print("         <div class='cell' data-title='CERTIFICATE STATUS'> <B>OK</B><BR>")
             print("              <br><b> CERTIFICATE NAMES</b> <br>")    
             for san in certnames.split():
-                print(san[1] + '<br>')
+                print(san + '<br>')
                  
             print("<br><B>CERTIFICATE ISSUER:</B> <br>")    
             print(issuer+ '<br>')
@@ -360,7 +391,7 @@ def generate_report(input_csv,output_html):
         if (snapshot == "UNABLE TO TEST"):
            print("         <div class='cell' data-title='ORIGINAL URL'>NO PREVIEW AVAILABLE</div>")
         else:
-           print("         <div class='cell' data-title='ORIGINAL URL'><img src='%s' alt='PREVIEW' class='img'></div>" % snapshot)
+           print("         <div class='cell' data-title='ORIGINAL URL'><img src='snapshots/%s' alt='PREVIEW' class='img'></div>" % snapshot)
            
     print("     </div><!-- End row -->") # Row
     print(" </div><!-- End table -->")  # Table 
@@ -452,7 +483,6 @@ except NameError:
             verbose and DEBUG("URL is set, performing single URL analysis")
             sites_list = url.split() 
             folder_path = base_path + "/" + url
-            verbose and DEBUG("URL is set, performing single URL analysis")
 
         except NameError: 
             # No domain analysis, no site list analysys, no URL analysis, FAIL! 
@@ -473,12 +503,12 @@ for site in sites_list:
     verbose and DEBUG("Testing site: " + site)
     result=url_analisys(site,folder_path)    
     verbose and DEBUG("Site analysis finished to " + site + " result was: " + str(result))
-    if result != -1:
-       f.write(''.join(result) + '\n')
+    #if result != -1:
+    f.write(''.join(result) + '\n')
 
 f.close()
 verbose and DEBUG("Generting report")
-os.popen('cp /get_assets/table.css ' + folder_path) 
-os.popen('cp /get_assets/logo.png ' + folder_path)
+os.popen('cp table.css ' + folder_path) 
+os.popen('cp logo.png ' + folder_path)
 generate_report(csv_file,report_file)
 verbose and DEBUG("Report finished")
