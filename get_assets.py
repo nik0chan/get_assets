@@ -56,8 +56,7 @@ def get_legacy_session():
     session.mount('https://', CustomHttpAdapter(ctx))
     return session
 
-def url_snapshot(url,path):
-# Get a web snapshot 
+def url_snapshot(url, path):
     try:
         chrome_options = Options()
         chrome_options.add_argument("--headless")
@@ -69,23 +68,18 @@ def url_snapshot(url,path):
         verbose and chrome_options.add_argument('--log-path=chromium.log')
 
         service = ChromeService(executable_path="chromedriver", port=6666)
-        driver = webdriver.Chrome(service=service,options=chrome_options)
-        driver.get("https://www.google.com")
-        driver.set_page_load_timeout(30)        
-        driver.set_window_size(1366,768)
-        driver.get(url)
-        output_file = str(url).replace('https://', '').replace('http://','').replace('/','')
-        output_file += '.png'
-        verbose and DEBUG("Ouput file: " + output_file)
-        driver.save_screenshot(path + output_file)
-        driver.close()
-        verbose and DEBUG("TEST 5 (GET URL SNAPSHOT) STORED ON: " + path + output_file)
+        with webdriver.Chrome(service=service, options=chrome_options) as driver:
+            driver.get(url)
+            driver.set_page_load_timeout(30)
+            driver.set_window_size(1366, 768)
+            output_file = str(url).replace('https://', '').replace('http://', '').replace('/', '') + '.png'
+            verbose and DEBUG("Output file: " + output_file)
+            driver.save_screenshot(path + output_file)
+            verbose and DEBUG("TEST 5 (GET URL SNAPSHOT) STORED ON: " + path + output_file)
+            return output_file
     except Exception as e:
-        ERROR('' + str(e))
-        output_file = -1
-
-    driver.close()
-    return output_file
+        ERROR(str(e))
+        raise
 
 def follow(url): 
 # Test if an url is redirected
@@ -400,14 +394,12 @@ def generate_report(input_csv,output_html):
         print("     </div><!-- End row -->") # Row
     # EOF For 
     print(" </div><!-- End table -->")  # Table 
-    print("</div><!-- End Wrapper -->")  # Wrapper
     print("</body>")
     print("</html>")
 
     sys.stdout.close()
     sys.stdout = old_target
     verbose and DEBUG('Report generated a file: ' + output_html)
-
 
 def get_hosts_from_file(file):
     verbose and DEBUG("Reading host file from " + file)
@@ -417,36 +409,31 @@ def get_hosts_from_file(file):
     for host in lines:
         hosts[host]=""
 
+    print(hosts)
     return hosts
 
 def vulnerable_cipher(fqdn):
     # Function that checks all the ciphers the url accepts, then it creates a string with all the secure ones and another with the vulnerable ones
     # First we use sslscan feature, that give us the info we need about the ciphers in the host. Grep to reduce the info into an auxiliar .txt
-    #list = os.system("sslscan " + fqdn + "| grep 'Accepted\|Preferred' > /tmp/codecs.txt")
     list = os.system("sslscan --no-check-certificate --no-cipher-details --no-ciphersuites --no-compression --no-groups --no-heartbleed --no-renegotiation " + fqdn + " |  grep enabled | tr '\n' > /tmp/protocols.txt")
     file = open("/tmp/protocols.txt", "r")
     # Strings that will save the secure codecs and the vulnerables ones
     secure = insecure = "" 
-    # For every line in the file we check the version: If version > TLSv1.2 its insecure
     verbose and DEBUG("TEST 3.2: Checking certificate cyphers")
-    for cipher in file:
-        #if "TLSv1.1" in cipher or "TLSv1.0" in cipher or "SSLv3" in cipher:
-        #    insecure = insecure + cipher
-        # sslscan also format the output when it finds and insecure cipher using the yellow color, that matches 33m, so if we get that in the input we
-        # can consider it also not secure at all
-        #else:
-        verbose and DEBUG("Analyzing: " + cipher) 
-        if "32m" in cipher:
-            secure = secure + cipher[0:cipher.find(' ')] + ' '
+    for cypher in file:
+        verbose and DEBUG("Analyzing: " + cypher) 
+        # 32m = green color 
+        if "32m" in cypher:
+            secure = secure + cypher[0:cypher.find(' ')] + ' '
         else:
-            insecure = insecure + cipher[0:cipher.find(' ')] + ' '
+            insecure = insecure + cypher[0:cypher.find(' ')] + ' '
 
     verbose and DEBUG("SECURE CYPHERS: " + str(secure))
     verbose and DEBUG("NON SECURE CYPHERS: " + str(insecure))
     file.close()
     return secure, insecure
 
-# Main 
+# Main  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 try: 
     opts, args = getopt.getopt(sys.argv[1:],"vd:l:u:p:",["verbose","domain=","report_path"])
 
@@ -454,6 +441,8 @@ except getopt.GetoptError:
     ERROR('Error unexpected input')
     print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list> | -u <single URL>] [--verbose --domain <domain> --host <host file list>] [ -p <path> | --report_path <path> ]')
     sys.exit(2) 
+
+base_path = "." 
 
 for opt, arg in opts: 
     if opt in ('-v','--verbose'): 
@@ -468,33 +457,38 @@ for opt, arg in opts:
     elif opt in ("-p", "--report_path"):
         base_path = arg
 
-try: 
-    domain  
+if 'domain' in locals():
+  try: 
     verbose and DEBUG("Domain set, performing zone_transfer query") 
     folder_path = base_path + "/" + domain
     sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
-    
-except NameError: 
-    # No domain analysis
-    try: 
-        hosts_list
-        verbose and DEBUG("Host list set, performing text file list analysis")
-        folder_path = base_path + "/" + hosts_list
-        sites_list=get_hosts_from_file(hosts_list)  # Obtain hosts from file
+  except NameError: 
+    ERROR("Error on domain")
 
-    except NameError: 
-        # No domain analysis, no site list analysis
-        try: 
-            verbose and DEBUG("URL is set, performing single URL analysis")
-            sites_list = url.split() 
-            folder_path = base_path + "/" + url
-            verbose and DEBUG("URL is set, performing single URL analysis")
+elif 'hosts_list' in locals():
+  try: 
+    verbose and DEBUG("Host list set, performing text file list analysis")
+    folder_path = base_path + "/" + hosts_list
+    sites_list=get_hosts_from_file(hosts_list) 
+    print(hosts_list)  # Obtain hosts from file
+  except NameError: 
+    ERROR("Error on host list")
+        
+elif 'url' in globals(): 
+  try: 
+    verbose and DEBUG("URL is set, performing single URL analysis")
+    sites_list = url.split()
+    print(site_list)  # Obtain hosts from file
+    folder_path = base_path + "/" + url
+    verbose and DEBUG("URL is set, performing single URL analysis")
+  except NameError: 
+    ERROR("Error on site list")
 
-        except NameError: 
-            # No domain analysis, no site list analysys, no URL analysis, FAIL! 
-            ERROR('Nor domain, hosts list, or URL options are set you must to specify one of them')
-            print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>] [ -p <path> | --report_path <path> --url <URL>]')
-            sys.exit(2)
+else:
+# No domain analysis, no site list analysys, no URL analysis, FAIL! 
+  ERROR('Nor domain, hosts list, or URL options are set you must to specify one of them')
+  print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>] [ -p <path> | --report_path <path> --url <URL>]')
+  sys.exit(2)
 
 # Create folders structure
 Path(folder_path).mkdir(parents=True, exist_ok=True)
