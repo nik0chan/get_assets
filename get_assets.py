@@ -11,6 +11,7 @@ import getopt
 import socket
 import sys
 import os
+import argparse
 
 # SSL Renegotiation (Lecagy)
 import urllib3
@@ -433,85 +434,79 @@ def vulnerable_cipher(fqdn):
     file.close()
     return secure, insecure
 
-# Main  --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-try:
-    opts, args = getopt.getopt(sys.argv[1:],"vd:l:u:p:",["verbose","domain=","report_path"])
+def parse_arguments():
+    # Argument Parsing
+    parser = argparse.ArgumentParser(description='Web Security Analyzer')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose mode')
+    parser.add_argument('-d', '--domain', help='Domain for zone transfer')
+    parser.add_argument('-l', '--host_list', help='File containing list of hosts')
+    parser.add_argument('-u', '--url', help='Single URL analysis')
+    parser.add_argument('-p', '--report_path', default='/reports', help='Path for the report')
 
-except getopt.GetoptError:
-    ERROR('Error unexpected input')
-    print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list> | -u <single URL>] [ -p <path> ]')
-    sys.exit(2)
+    return parser.parse_args()
 
-base_path = "."
+def main():
+    report_path = "/reports"
+    args = parse_arguments()
 
-for opt, arg in opts:
-    if opt in ('-v'):
-        verbose=1
-        DEBUG('Verbose mode ON')
-    elif opt in ("-d"):
-        domain = arg
-    elif opt in ("-l"):
-        hosts_list = arg
-    elif opt in ("-u"):
-        url = arg
-    elif opt in ("-p"):
-        base_path = arg
+    #print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>] [ -p <path> | --report_path <path> --url <URL>]')
+    verbose = 0
+    if args.verbose:
+        print('Verbose mode is ON')
+        verbose = 1
+    if args.domain:
+        verbose and DEBUG("Performing zone transfer for domain " + args.domain)
+        try:
+          verbose and DEBUG("Domain set, performing zone_transfer query")
+          sites_list=dns_zone_xfer(args.domain)
+        except NameError:
+          ERROR("Error on domain")
 
-if 'domain' in locals():
-  try:
-    verbose and DEBUG("Domain set, performing zone_transfer query")
-    folder_path = base_path + "/" + domain
-    sites_list=dns_zone_xfer(domain)                # Obtain hosts from zone_transfer
-  except NameError:
-    ERROR("Error on domain")
+    if args.host_list:
+        verbose and DEBUG("Performing analysis for hosts from file " + args.host_list)
+        try:
+          verbose and DEBUG("Host list set, performing text file list analysis using file")
+          sites_list=get_hosts_from_file(args.host_list)
+        except NameError:
+          ERROR("Error on host list")
 
-elif 'hosts_list' in locals():
-  try:
-    verbose and DEBUG("Host list set, performing text file list analysis")
-    folder_path = base_path + "/" + hosts_list
-    sites_list=get_hosts_from_file(hosts_list)
-    print(hosts_list)  # Obtain hosts from file
-  except NameError:
-    ERROR("Error on host list")
+    if args.url:
+        print('Performing analysis for single URL:', args.url)
+        try:
+          verbose and DEBUG("URL is set, performing single URL analysis on " + args.url)
+          sites_list = args.url.split()
+        except NameError:
+          ERROR("Error on site list")
 
-elif 'url' in globals():
-  try:
-    verbose and DEBUG("URL is set, performing single URL analysis on " + url)
-    sites_list = url.split()
-    folder_path = base_path + "/" + url
-    verbose and DEBUG("Storing report on " + folder_path)
-  except NameError:
-    ERROR("Error on site list")
+    verbose and DEBUG("Report will be stored on " + args.report_path)
 
-else:
-# No domain analysis, no site list analysys, no URL analysis, FAIL!
-  ERROR('Nor domain, hosts list, or URL options are set you must to specify one of them')
-  print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>] [ -p <path> | --report_path <path> --url <URL>]')
-  sys.exit(2)
+    # Create folders structure
+    DEBUG("Destination report path " + args.report_path)
+    Path(args.report_path).mkdir(parents=True, exist_ok=True)
+    Path(args.report_path+"/snapshots").mkdir(parents=True, exist_ok=True)
 
-# Create folders structure
-Path(folder_path).mkdir(parents=True, exist_ok=True)
-Path(folder_path+"/snapshots").mkdir(parents=True, exist_ok=True)
+    csv_file = args.report_path + "/report.csv"
+    report_file = args.report_path + "/index.html"
 
-csv_file = folder_path + "/report.csv"
-report_file = folder_path + "/index.html"
+    verbose and DEBUG("Starting tests")
+    f = open(csv_file,'w')
+    for site in sites_list:
+      verbose and DEBUG("Testing site: " + site)
+      if(len(site) >= 3):
+        result=url_analisys(site,report_path)
+        verbose and DEBUG("Site analysis finished to " + site + " result was: " + str(result))
+        if result != -1:
+          f.write(''.join(result) + '\n')
+      else:
+        verbose and DEBUG("Skipping site due incorrect lenght")
+      verbose and DEBUG("--------------------------------------------------------------------")
 
-verbose and DEBUG("Starting tests")
-f = open(csv_file,'w')
-for site in sites_list:
-    verbose and DEBUG("Testing site: " + site)
-    if(len(site) >= 3):
-      result=url_analisys(site,folder_path)
-      verbose and DEBUG("Site analysis finished to " + site + " result was: " + str(result))
-      if result != -1:
-        f.write(''.join(result) + '\n')
-    else:
-      verbose and DEBUG("Skipping site due incorrect lenght")
-    verbose and DEBUG("--------------------------------------------------------------------")
+    f.close()
+    verbose and DEBUG("Generting report")
+    os.popen('cp table.css ' + report_path)
+    os.popen('cp logo.png ' + report_path)
+    generate_report(csv_file,report_file)
+    verbose and DEBUG("Report finished")
 
-f.close()
-verbose and DEBUG("Generting report")
-os.popen('cp table.css ' + folder_path)
-os.popen('cp logo.png ' + folder_path)
-generate_report(csv_file,report_file)
-verbose and DEBUG("Report finished")
+if __name__ == "__main__":
+    main()
