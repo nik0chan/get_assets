@@ -82,7 +82,7 @@ def url_snapshot(url, path):
         ERROR(str(e))
         raise
 
-def follow(url):
+def follow(url,verbose):
 # Test if an url is redirected
     final_url = "UNABLE TO DETERMINE"
     try:
@@ -113,7 +113,7 @@ def follow(url):
 
     return response.url
 
-def verify_ssl(url):
+def verify_ssl(url,verbose):
 # Verify if SSL certificate for URL is correct
     val = 0
     certnames = 'UNABLE TO DETERMINE'
@@ -191,16 +191,40 @@ def verify_ssl(url):
 
     return str(val), certnames, issuer, expiry
 
-def charset_ok(strg, search=re.compile(r'[^A-Za-z0-9:./_-]').search):
+def is_valid_hostname(hostname,verbose):
 # Verify if chars on URL are permitted
-    verbose and DEBUG('Testing charset for ' + strg)
-    return not bool(search(strg))
+    try:
+      verbose and DEBUG("Testing charset for " + hostname)
+      pattern = re.compile(r"^(?!-)[A-Za-z0-9-]{1,63}(?<!-)(\.[A-Za-z0-9-]{1,63})*$")
+      return bool(pattern.match(hostname))
+    except re.error as e:
+      ERROR("Invalid URL " + hostname + str(e))
 
-def url_analisys(fqdn,folder_path):
+def get_ip_address(hostname,verbose):
+    try:
+        verbose and DEBUG("resolving IP address for " + hostname)
+        ip_address = socket.gethostbyname(hostname)
+        verbose and DEBUG("IP address resolved " + ip_address)
+        return ip_address
+    except socket.gaierror as e:
+        verbose and DEBUG("Unable to determine resolution for " + hostname)
+        verbose and ERROR("code " + str(e))
+        return 0
+
+def check_port_connection(hostname, port, timeout,verbose):
+    try:
+        with socket.create_connection((hostname, port), timeout=timeout) as connection:
+           verbose and DEBUG("connection established to " + hostname + " on port " + str(port))
+           return 1
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        verbose and DEBUG("Unable to stablish connection to " + hostname + " via " + str(port) + " timeout set to " + str(timeout))
+        return 0
+
+def url_analisys(fqdn,folder_path,verbose):
 # Performs test for URL, redirects, certificate validation, and image dump
     ssl_status = "KO"
     final_url = "UNABLE TO DETERMINE"
-    snapshot_file = ""
+    snapshot_file = "not_found.png"
     secure = "UNABLE TO DETERMINE"
     insecure = "UNABLE TO DETERMINE"
     certnames = "UNABLE TO DETERMINE"
@@ -208,66 +232,45 @@ def url_analisys(fqdn,folder_path):
     expiry = "UNABLE TO DETERMINE"
     http_available = 0
     https_available = 0
-
     try:
         result = -1
-        if  charset_ok(fqdn):
+        if is_valid_hostname(fqdn,verbose):
            # DNS ANALYSIS
-           try:
-             socket.getaddrinfo(fqdn,80)
+           ip_address = get_ip_address(fqdn,verbose)  # TEST 1: Name resolution
+           if ip_address:
              verbose and DEBUG("TEST 1 (CHECK DNS/IP RESOLUTION): OK")
-
-             http_location = (fqdn,80)
-             https_location = (fqdn,443)
-
-             # IS PORT 80 REACHABLE
-             try:
-               url_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-               url_socket.settimeout(5)
-               http_available = url_socket.connect_ex(http_location)
+             http_available = check_port_connection(fqdn,80,5,verbose) # TEST 2: HTTP connection
+             if http_available:
                verbose and DEBUG('TEST 2 (CHECK PORT 80 REACHABLE): YES')
-
-               # IS PORT 443 REACHABLE
-               verbose and DEBUG('TEST 3 (CHECK PORT 443 REACHABLE): YES')
-               try:
-                  https_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                  https_socket.settimeout(5)
-                  https_available = https_socket.connect_ex(https_location)
-                  # CHECK SSL STATUS
-                  ssl_status, certnames, issuer, expiry=verify_ssl(fqdn)
-                  # GET SECURE AND INSECURE CYPHERS
-                  secure, insecure = vulnerable_cipher(str(fqdn))
-
-               except socket.timeout: # check port 443 connection error
-                  https_available = -1
-                  verbose and WARNING('Timeout connecting to ' + fqdn + 'using 443 (http) port')
-
-             except socket.timeout: # check port 80 connection error
+             else:
+               verbose and DEBUG('TEST 2 (CHECK PORT 80 REACHABLE): FAIL')
                http_available = -1
-               verbose and WARNING('Timeout connecting to ' + fqdn + 'using 80 (http) port')
+             https_available = check_port_connection(fqdn,443,5,verbose) # TEST 3: SSL connection
+             if https_available:
+               verbose and DEBUG('TEST 3 (CHECK PORT 443 REACHABLE): YES')
+               ssl_status, certnames, issuer, expiry=verify_ssl(fqdn,verbose) # TEST 4: Certificate status
+               secure, insecure = vulnerable_cipher(str(fqdn),verbose) # TEST 5: Vulnerable cypher / protocol
+             else:
+               verbose and DEBUG('TEST 3 (CHECK PORT 443 REACHABLE): FAIL')
+               http_available = -1
 
-           except Exception as error: # check dns resolution error
-               if error.args[0] == '-2' :
-                   ERROR('Unable to resolve name, URL analysis stopped')
-               else :
-                   ERROR('Unhandled Error, URL analysis stopped' + str(error))
-
-
+           else:
+             verbose and DEBUG("TEST 1 (CHECK DNS/IP RESOLUTION): FAIL")
+             ssl_status = "-2"
         else: # charset test error on address
-            ERROR('Skipping ' + str(fqdn) + ' due incorrect character found')
+            ERROR('Skipping ' + str(fqdn) + ' invalid hostname')
 
-
-        if http_available==0 or https_available==0:
+        if http_available or https_available:
            # GET FINAL URL
            url = "http://" + fqdn
-           final_url=follow(url)
+           final_url=follow(url,verbose)
            # GET WEBPAGE SNAPSHOT
            if final_url != -1 :
               snapshot_file = url_snapshot(url,folder_path + '/snapshots/')
               verbose and DEBUG("File stored on: " + snapshot_file)
 
     except Exception as e: # UNHANDLED EXCEPTION
-        verbose and ERROR("Error ocurred analysing " + str(fqdn) + " site")
+        verbose and ERROR("Error " + str(e) + " + ocurred analysing " + str(fqdn) + " site")
 
     result=str(fqdn) + ',' + str(ssl_status) + ',' + str(final_url), ',' + str(secure) + ',' + str(insecure) + ',' + str(snapshot_file) + ',' + str(certnames) + ',' + str(issuer) + ',' + str(expiry)
     verbose and DEBUG('URL analysis ended, result: ') and print(result)
@@ -343,54 +346,45 @@ def generate_report(input_csv,output_html):
         issuer = row[7]
         expiration = row[8]
 
-        print("     <div class='row'>")
+
+        status_messages = {
+            "0": "<B>OK</B><BR>",
+           "-1": "KO<BR> Domain not match certificate<BR>",
+           "-2": "KO<BR> Unable to resolve<BR>",
+           "-3": "KO<BR> Expired certificate<BR>",
+           "-4": "KO<BR> Refused connection<BR>",
+           "KO": "KO<BR> Unhandled error<BR>"
+        }
+
+        message = status_messages.get(cert_status, "KO, Unknown status")
+        css_class = "_ko" if message.startswith("KO") else ""
+
+        print(f"     <div class='row{css_class}'>")
         print("         <div class='cell' data-title='ORIGINAL URL'>%s</div>" % url_from)
-        if(cert_status == "0"):
-            print("         <div class='cell' data-title='CERTIFICATE STATUS'> <B>OK</B><BR>")
-            print("              <br><b> CERTIFICATE NAMES</b> <br>")
-            for san in certnames.split():
-                print('                ' + san + '<br>')
+        print(f"         <div class='cell{css_class}' data-title='CERTIFICATE STATUS'>{message}")
+        print("              <br><b> CERTIFICATE NAMES</b> <br>")
+        for san in certnames.split():
+            print('                ' + san + '<br>')
 
-            print("<br><B>CERTIFICATE ISSUER:</B> <br>")
-            print(issuer+ '<br>')
-            print("<br><B>Certificate expires on:</B><br>")
-            print(expiration)
-            print("</div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'>")
-            for cipher in secure.split():
-              print("            <br>" + cipher)
-            print("            </div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'>")
-            for cipher in insecure.split():
-              print("            <br>" + cipher)
-            print("            </div>")
-        elif (cert_status == "-1"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Incorrect domain</div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-        elif (cert_status == "-2"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Name error</div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-        elif (cert_status == "-3"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Expired</div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-        elif (cert_status == "-4"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Refused connection</div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-        elif (cert_status == "-5"):
-            print("         <div class='cell_ko' data-title='CERTIFICATE STATUS'>KO, Unknown error </div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-            print("            <div class='cell' data-title='CIPHER SECURITY'></div>")
-
+        print("<br><B>CERTIFICATE ISSUER:</B> <br>")
+        print(issuer+ '<br>')
+        print("<br><B>Certificate expires on:</B><br>")
+        print(expiration)
+        print("</div>")
+        print("            <div class='cell' data-title='CIPHER SECURITY'>")
+        for cipher in secure.split():
+          print("            <br>" + cipher)
+        print("            </div>")
+        print("            <div class='cell' data-title='CIPHER SECURITY'>")
+        for cipher in insecure.split():
+          print("            <br>" + cipher)
+        print("            </div>")
         print("         <div class='cell' data-title='FINAL URL'>%s</div>" % url_to)
 
         if (snapshot == "UNABLE TO TEST"):
            print("         <div class='cell' data-title='ORIGINAL URL'>NO PREVIEW AVAILABLE</div>")
         else:
-           print("         <div class='cell' data-title='ORIGINAL URL'><img src='snapshots/%s' alt='PREVIEW' class='img'></div>" % snapshot)
+           print(f"         <div class='cell' data-title='ORIGINAL URL'><img src='snapshots/%s' alt='NO PREVIEW' display='block' margin='0 auto' vertical-align='middle' class='img{css_class}'></div>" % snapshot)
 
         print("     </div><!-- End row -->") # Row
     # EOF For
@@ -409,11 +403,9 @@ def get_hosts_from_file(file):
     lines = f.read().splitlines()
     for host in lines:
         hosts[host]=""
-
-    print(hosts)
     return hosts
 
-def vulnerable_cipher(fqdn):
+def vulnerable_cipher(fqdn,verbose):
     # Function that checks all the ciphers the url accepts, then it creates a string with all the secure ones and another with the vulnerable ones
     # First we use sslscan feature, that give us the info we need about the ciphers in the host. Grep to reduce the info into an auxiliar .txt
     list = os.system("sslscan --no-check-certificate --no-cipher-details --no-ciphersuites --no-compression --no-groups --no-heartbleed --no-renegotiation " + fqdn + " |  grep enabled | tr '\n' > /tmp/protocols.txt")
@@ -446,7 +438,6 @@ def parse_arguments():
     return parser.parse_args()
 
 def main():
-    report_path = "/reports"
     args = parse_arguments()
 
     #print('Usage: get_assets.py [-v] [-d <domain> | -l <host file list>] [--verbose --domain <domain> --host <host file list>] [ -p <path> | --report_path <path> --url <URL>]')
@@ -457,10 +448,10 @@ def main():
     if args.domain:
         verbose and DEBUG("Performing zone transfer for domain " + args.domain)
         try:
-          verbose and DEBUG("Domain set, performing zone_transfer query")
+          verbose and DEBUG("DOMAIN set, performing ZONE TRANSFER query and analysis")
           sites_list=dns_zone_xfer(args.domain)
         except NameError:
-          ERROR("Error on domain")
+          ERROR("Name error on DOMAIN analysis")
 
     if args.host_list:
         verbose and DEBUG("Performing analysis for hosts from file " + args.host_list)
@@ -468,7 +459,7 @@ def main():
           verbose and DEBUG("Host list set, performing text file list analysis using file")
           sites_list=get_hosts_from_file(args.host_list)
         except NameError:
-          ERROR("Error on host list")
+          ERROR("Name error on HOST list analysis")
 
     if args.url:
         print('Performing analysis for single URL:', args.url)
@@ -476,12 +467,12 @@ def main():
           verbose and DEBUG("URL is set, performing single URL analysis on " + args.url)
           sites_list = args.url.split()
         except NameError:
-          ERROR("Error on site list")
+          ERROR("Name error on single URL analysis")
 
     verbose and DEBUG("Report will be stored on " + args.report_path)
 
     # Create folders structure
-    DEBUG("Destination report path " + args.report_path)
+    verbose and DEBUG("Destination report path " + args.report_path)
     Path(args.report_path).mkdir(parents=True, exist_ok=True)
     Path(args.report_path+"/snapshots").mkdir(parents=True, exist_ok=True)
 
@@ -493,7 +484,7 @@ def main():
     for site in sites_list:
       verbose and DEBUG("Testing site: " + site)
       if(len(site) >= 3):
-        result=url_analisys(site,report_path)
+        result=url_analisys(site,args.report_path,verbose)
         verbose and DEBUG("Site analysis finished to " + site + " result was: " + str(result))
         if result != -1:
           f.write(''.join(result) + '\n')
@@ -503,8 +494,8 @@ def main():
 
     f.close()
     verbose and DEBUG("Generting report")
-    os.popen('cp table.css ' + report_path)
-    os.popen('cp logo.png ' + report_path)
+    os.popen('cp table.css ' + args.report_path)
+    os.popen('cp logo.png ' + args.report_path)
     generate_report(csv_file,report_file)
     verbose and DEBUG("Report finished")
 
